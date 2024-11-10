@@ -1,0 +1,8 @@
+recursive-include ouch *.py
+include *.py
+include *.rst
+include *.md
+include MANIFEST.in
+include LICENSE
+include ChangeLog.md
+global-exclude *.py[cod] __pycache__
