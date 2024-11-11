@@ -434,74 +434,6 @@ def get_pre_trained():
     )
 
 
-def plot_wav(f):
-    y, sr = readwav(f)
-    time = np.linspace(0, len(y) / sr, num=len(y))
-    plt.ion()
-    plt.figure(figsize=(10, 4))
-    plt.plot(time, y, linewidth=0.2)
-    plt.title("Waveform of the audio")
-    plt.xlabel("time (s)")
-    plt.ylabel("amplitude")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-
-def plot_freqspec(f, max_freq=16000):
-    y, sr = readwav(f)
-    spec = np.fft.fft(y)
-    freq = np.fft.fftfreq(len(spec), 1 / sr)
-    idx = np.where((freq >= 0) & (freq <= max_freq))
-    plt.ion()
-    plt.figure(figsize=(10, 4))
-    plt.plot(freq[idx], np.abs(spec[idx]), linewidth=0.2)
-    plt.title("Frequency spectrum")
-    plt.xlabel("frequency (Hz)")
-    plt.ylabel("magnitude")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
-
-def spectrogram(f, dB=False):
-    y, sr = readwav(f)
-    y = np.abs(librosa.stft(y)) ** 2
-    if dB:
-        y = librosa.amplitude_to_db(y, ref=np.max)
-    return y, sr
-
-
-def plot_spectrogram(f, n_mels=128):
-    s, sr = spectrogram(f, dB=True)
-    plt.ion()
-    plt.figure(figsize=(10, 4))
-    librosa.display.specshow(s, sr=sr, x_axis="time", y_axis="log")
-    plt.colorbar(format="%+2.0f dB")
-    plt.title("spectrogram")
-    plt.tight_layout()
-    plt.show()
-
-
-def melspectrogram(f, n_mels=128, dB=False):
-    y, sr = readwav(f)
-    y = librosa.feature.melspectrogram(y=y, n_mels=n_mels)
-    if dB:
-        y = librosa.power_to_db(y, ref=np.max)
-    return y, sr
-
-
-def plot_melspectrogram(f, n_mels=128):
-    m, sr = melspectrogram(f, n_mels=n_mels, dB=True)
-    plt.ion()
-    plt.figure(figsize=(10, 4))
-    librosa.display.specshow(m, sr=sr, x_axis="time", y_axis="mel")
-    plt.colorbar(format="%+2.0f dB")
-    plt.title("Mel-frequency spectrogram")
-    plt.tight_layout()
-    plt.show()
-
-
 # ----------------------
 # Audio perturber
 # ----------------------
@@ -1076,7 +1008,7 @@ def record_voice(out, duration=5, sr=44100):
     return savewav(out, (audio, sr))
 
 
-def record_voice_osascript(out=None, duration=5):
+def record_voice_osa(out=None, duration=5):
     d = rf"{HOME()}/Library/Group\ Containers/group.com.apple.VoiceMemos.shared/Recordings"
     script = tmpfile(suffix=".scpt")
     writer(script).write(
