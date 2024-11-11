@@ -28,5 +28,16 @@ __pycache__
 build/
 dist/
 *egg-info
+
+# custom
+o/
+data/
+real/
+quar/
+*.db
+*.wav
+*.mp4
+
+# venv
 .venv
 .env/
