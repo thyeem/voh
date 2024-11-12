@@ -1,7 +1,7 @@
 import time
 
-from utils import *
-from voh import *
+from .utils import *
+from .voh import *
 
 
 def demo(model, ref=None, target=None, threshold=0.7, dur=4, osa=True):

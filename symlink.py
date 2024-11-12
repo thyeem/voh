@@ -10,7 +10,7 @@ def symlink(path):
         )
     f = writer(path)
     f.write("#!/bin/bash\n")
-    f.write(f'python {pwd()}/cli.py "$@"\n')
+    f.write(f'python {pwd()}/voh/cli.py "$@"\n')
     shell(f"chmod 755 {path}")
 
 

@@ -4,7 +4,7 @@ from foc import *
 from ouch import *
 from torch.nn import functional as F
 
-from utils import *
+from .utils import *
 
 
 def pad_conv(size_kernel, dilation=1):

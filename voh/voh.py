@@ -8,9 +8,9 @@ from ouch import *
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
-from utils import *
 
-from model import *
+from .model import *
+from .utils import *
 
 
 def vohconf(conf=None, **kwds):

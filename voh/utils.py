@@ -7,7 +7,6 @@ import wave
 from functools import lru_cache, partial
 
 import librosa
-import matplotlib.pyplot as plt
 import numpy as np
 import sounddevice as sd
 import soundfile as sf
@@ -456,7 +455,7 @@ def get_duration(f):
 
 
 @fx
-def rand_noise(ysr, snr=10, v=False, MIN=3, MAX=30):
+def gaussian_noise(ysr, snr=10, v=False, MIN=3, MAX=30):
     """add Gaussian random noise to a given audio"""
     y, sr = ysr  # (waveform, sample rate)
     snr = max(MIN, min(rfnum(snr), MAX))  # clip the SNR value between (MIN, MAX)
@@ -466,7 +465,7 @@ def rand_noise(ysr, snr=10, v=False, MIN=3, MAX=30):
     noise = np.random.normal(0, np.sqrt(noise_power), y.shape)
     ysr = y + noise, sr
     if v:
-        dumper(rand_noise=f"snr={snr:.1f} (signal/noise, dB)")
+        dumper(gaussian_noise=f"snr={snr:.1f} (signal/noise, dB)")
     return ysr
 
 
@@ -474,7 +473,7 @@ def rand_noise(ysr, snr=10, v=False, MIN=3, MAX=30):
 def sfx_noise(ysr, sfx=None, snr=5, v=False):
     y, sr = ysr
     snr = rfnum(snr)
-    b, _ = resample(sfx or rand_sfx(), sr=sr)
+    b, _ = resample(sfx or randsfx(), sr=sr)
     if len(y) > len(b):
         b = np.tile(b, len(y) // len(b) + 1)
     b = b[: len(y)]
@@ -669,7 +668,7 @@ def demo_aug(p=1, v=False):
     g = lazy(
         shuffle,
         [
-            rand_noise(snr=(10, 20), v=v),
+            gaussian_noise(snr=(10, 20), v=v),
             sfx_noise(snr=(5, 10), v=v),
             time_shift(sec=(-1.5, 1.5), v=v),
             time_stretch(rate=(0.8, 1.2), v=v),
@@ -692,7 +691,7 @@ def voh_aug(v=False, p_finish=0.7, p_main=0.3):
         choice,
         [  # finisher: gain power or inject noise/sfx
             gain(db=(-3, 3), v=v),
-            rand_noise(snr=(5, 10), v=v),
+            gaussian_noise(snr=(5, 10), v=v),
             sfx_noise(snr=(5, 10), v=v),
         ],
     )
@@ -714,18 +713,22 @@ def voh_aug(v=False, p_finish=0.7, p_main=0.3):
 
 
 @lru_cache
-def rand_sfx():
+def randsfx():
     return readwav(choice(ls("sfx")))
 
 
-def update_sfx(x, out="sfx", ss=None, to=None):
+def add_to_sfx(src, out="sfx", ss=None, to=None):
+    """Given wav sources are added to the SFX directory"""
     ss = f"-ss {ss}" if ss else ""
     to = f"-to {to}" if to else ""
-    files = ls(x) if isinstance(x, str) else x
+    files = ls(src) if isinstance(src, str) else src
     mkdir(out)
     for f in files:
-        base = hashlib.sha256(reader(f, mode="rb").read()).hexdigest()[:16]
-        wav = f"{out}/{base}.wav"
+        wav = (
+            f"{out}/"
+            f"{hashlib.sha256(reader(f, mode='rb').read()).hexdigest()[:16]}"
+            ".wav"
+        )
         if not exists(wav):
             dumper(converting=f"{f}  ->  {wav}")
             shell(f"{_ffmpeg} -i {f} {ss} {to} -ac 1 {wav}")

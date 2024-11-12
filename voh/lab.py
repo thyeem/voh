@@ -5,8 +5,8 @@ from foc import *
 from ouch import *
 from sklearn.metrics import auc
 
-from utils import *
-from voh import *
+from .utils import *
+from .voh import *
 
 
 def TPR(x):
