@@ -50,17 +50,7 @@ def vohconf(conf=None, **kwds):
         size_attn_pool=128,
         size_out_dec=192,  # embedding size
     )
-
-    def check(x):
-        x = x or {}
-        d = dmap(x)
-        for k in x:
-            if k not in o:
-                print(f"Warning, removed invalid key: '{k}'.")
-                del d[k]
-        return d
-
-    o = o | check(conf) | check(dict(**kwds))
+    o = o | uniq_conf(conf, o) | uniq_conf(dict(**kwds), o)
     o.size_in_enc = o.num_mel_filters
     o.size_in_dec = o.size_out_enc
     return o
@@ -145,10 +135,11 @@ class voh(nn.Module):
         self.load_state_dict(model, strict=strict)
 
     def set_meta(self, meta=None):
-        self.meta = dmap(
+        o = dmap(
             avg_loss=0,
             min_loss=float("inf"),
-        ) | (meta or {})
+        )
+        self.meta = o | uniq_conf(meta, o)
 
     def into(self, device=None, dtype=None, **kwargs):
         """set a default dtype and device based on availability"""

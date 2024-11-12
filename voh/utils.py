@@ -279,6 +279,16 @@ def read_memmap(f):
     return y, sr
 
 
+def uniq_conf(x, o):
+    x = x or {}
+    d = dmap(x)
+    for k in x:
+        if k not in o:
+            print(f"Warning, removed invalid key: '{k}'.")
+            del d[k]
+    return d
+
+
 def speaker_id(f, maxlen=24):
     """Extract speaker ID from the directory name of a given audio file.
     Naming rule:
