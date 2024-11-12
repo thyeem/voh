@@ -1,81 +1,129 @@
 import click
 
 
-class vohGroup(click.Group):
+# -----------------
+# Customized click
+# -----------------
+def _write_dl(formatter, rows, col=12, indent=2):
+    rows = [(k, click.wrap_text(v)) for k, v in rows if k is not None]
+    formatter.write_dl(
+        [(click.style(" " * indent + k.ljust(col), bold=True), v) for k, v in rows],
+    )
+
+
+class _base:
+    def format_flags(self, ctx, formatter):
+        formatter.write_text("Flags:")
+        _write_dl(formatter, self.collect_flags(ctx))
+
+    def collect_flags(self, ctx):
+        return [
+            (", ".join(param.opts), param.help)
+            for param in self.get_params(ctx)
+            if isinstance(param, click.Option)
+        ]
+
+
+class _group(_base, click.Group):
     def format_help(self, ctx, formatter):
-        formatter.write_usage(ctx.command_path, "[FLAGS] COMMAND [ARGS]...")
+        formatter.write_usage(ctx.command_path, "[flags] command [args]...")
         formatter.write_paragraph()
-
         self.format_commands(ctx, formatter)
-
         formatter.write_paragraph()
+        self.format_custom_flags(formatter)
+
+    def format_commands(self, ctx, formatter):
+        commands = []
+        for name in self.list_commands(ctx):
+            cmd = self.get_command(ctx, name)
+            if cmd and not cmd.hidden:
+                commands.append((name, cmd))
+        if commands:
+            formatter.write_text("Available Commands:")
+            _write_dl(
+                formatter,
+                [(name, cmd.get_short_help_str()) for name, cmd in commands],
+            )
+
+    def format_custom_flags(self, formatter):
         formatter.write_text("Flags:")
         custom_flags = [
             ("-h, --help", "help for voh"),
             ("--version", "Show version information"),
         ]
-        self.write_dl(formatter, custom_flags, col=12)
+        _write_dl(formatter, custom_flags)
 
-    def format_commands(self, ctx, formatter):
-        commands = []
-        for subcommand in self.list_commands(ctx):
-            cmd = self.get_command(ctx, subcommand)
-            if cmd is None or cmd.hidden:
-                continue
-            commands.append((subcommand, cmd))
 
-        if commands:
-            formatter.write_text("Available Commands:")
-            self.write_dl(
-                formatter,
-                [(name, cmd.get_short_help_str()) for name, cmd in commands],
-                col=12,
-            )
+class _command(_base, click.Command):
+    def format_help(self, ctx, formatter):
+        self.format_usage(ctx, formatter)
+        formatter.write_paragraph()
+        self.format_flags(ctx, formatter)
 
-    def write_dl(self, formatter, rows, col):
-        rows = [(k, click.wrap_text(v)) for k, v in rows if k is not None]
-        formatter.write_dl(
-            [(click.style(k.ljust(col), bold=True), v) for k, v in rows],
+    def format_usage(self, ctx, formatter):
+        pieces = self.collect_usage_pieces(ctx)
+        formatter.write_usage(
+            ctx.command_path,
+            " ".join(pieces).replace("[OPTIONS]", "[flags]"),
         )
 
 
-@click.group(cls=vohGroup)
+# -----------------
+# CLI: voh
+# -----------------
+
+
+@click.group(cls=_group)
+@click.version_option(
+    version="0.0.1",
+    message="%(prog)s version is %(version)s",
+)
 @click.help_option("-h", "--help")
-@click.version_option(version="0.0.1", message="%(prog)s version %(version)s")
 def cli():
     pass
 
 
-@cli.command()
+@cli.command(cls=_command)
 @click.argument("model")
-@click.option("-f", "--file", type=str, help="Name of the conf file")
+@click.option(
+    "-f",
+    "--file",
+    type=str,
+    metavar="string",
+    help="Name of the conf file",
+)
+@click.help_option("-h", "--help")
 def create(model, file):
     """Create a model from a conf file"""
     click.echo(f"Creating model {model} with config file {file}")
 
 
-@cli.command()
+@cli.command(cls=_command)
 @click.argument("model")
+@click.help_option("-h", "--help")
 def show(model):
     """Show information for a model"""
     click.echo(f"Showing information for model {model}")
 
 
-@cli.command()
+@cli.command(cls=_command)
+@click.help_option("-h", "--help")
 def list():
     """List models"""
     click.echo("Listing all models")
 
 
-@cli.command()
+@cli.command(cls=_command)
 @click.argument("model")
+@click.help_option("-h", "--help")
 def train(model):
     """Train a model"""
     click.echo(f"Training model {model}")
 
 
-@cli.command()
+@cli.command(cls=_command)
 @click.argument("model")
+@click.help_option("-h", "--help")
 def rm(model):
     """Remove a model"""
     click.echo(f"Removing model {model}")
