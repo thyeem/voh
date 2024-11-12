@@ -285,7 +285,7 @@ class AttentivePool(nn.Module):
         norm_mask = mask / torch.sum(mask, dim=2, keepdim=True)  # (B, 1, T)
 
         # stats from encoder-output
-        mean, std = get_weighted_stats(x, norm_mask)  # (B, C, 1) each
+        mean, std = wtd_mu_sigma(x, norm_mask)  # (B, C, 1) each
         # enriched-concatenated input: (B, 3C, T)
         y = torch.cat((x, mean.expand(-1, -1, T), std.expand(-1, -1, T)), dim=1)
 
@@ -298,7 +298,7 @@ class AttentivePool(nn.Module):
             self.tdnn,
         )(y)
         # stats from attention
-        mu, sigma = get_weighted_stats(x, alpha)  # (B, C, 1) each
+        mu, sigma = wtd_mu_sigma(x, alpha)  # (B, C, 1) each
         return torch.cat((mu, sigma), dim=1)  # (B, 2C, 1)
 
 

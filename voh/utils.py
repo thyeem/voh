@@ -97,7 +97,7 @@ def tripletloss(anchor, positive, negative, margin=0.5):
 
 
 @torch.no_grad()
-def get_weighted_stats(x, alpha, dim=2, eps=1e-10):
+def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
     """Compute mean and standard deviation of input weighted by alpha"""
     mean = torch.sum(alpha * x, dim=dim, keepdim=True)  # (B, C, 1)
     var = torch.sum(alpha * (x - mean).pow(2), dim=dim)

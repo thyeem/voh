@@ -52,6 +52,7 @@ def vohconf(conf=None, **kwds):
     )
 
     def check(x):
+        x = x or {}
         d = dmap(x)
         for k in x:
             if k not in o:
