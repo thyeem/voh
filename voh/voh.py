@@ -32,7 +32,7 @@ def vohconf(conf=None, **kwds):
         ratio_warmup=0.01,
         size_batch=16,
         size_validate=20,
-        num_workers=os.cpu_count(),
+        num_workers=None,
         it_val=100,
         it_log=10,
         steps=None,
@@ -247,7 +247,7 @@ class voh(nn.Module):
     def dl(self):
         conf = dict(
             batch_size=self.conf.size_batch,
-            num_workers=self.conf.num_workers,
+            num_workers=self.conf.num_workers or os.cpu_count(),
             collate_fn=collate_fn,
             shuffle=False,
             persistent_workers=True,

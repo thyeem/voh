@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import json
 import math
@@ -277,6 +278,24 @@ def read_memmap(f):
     sr = fp[0].view("int32").item()
     y = fp[1:]
     return y, sr
+
+
+def read_conf(f):
+    conf = dmap()
+    for s in filter(
+        cf_(not_, g_(_.startswith)("#"), str.lstrip),
+        reader(f).read().splitlines(),
+    ):
+        s = s.split("#")[0].strip()
+        key, *v = s.split(None, 1)
+        conf[key] = ast.literal_eval(v[0]) if len(v) else None
+    return conf
+
+
+def write_conf(f, conf):
+    f = writer(f)
+    for k, v in conf.items():
+        f.write(f"{k} {v if v is not None else ''}\n")
 
 
 def uniq_conf(x, o):
