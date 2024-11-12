@@ -129,7 +129,11 @@ def create(model, file):
 )
 def train(model, file):
     """Train a model"""
-    click.echo(f"Training model {model}")
+    guard(exists(file), f"Error, not found the train conf: {file}")
+    conf = read_conf(file)
+    o = voh.load(model)
+    o.info()
+    o.get_trained()
 
 
 @cli.command(cls=_command)
@@ -139,14 +143,13 @@ def show(model):
     """Show information for a model"""
     o = voh.load(model)
     o.info()
-    dumper(path=which_model(model), size=size_model(model))
 
 
 @cli.command(cls=_command)
 @click.help_option("-h", "--help")
 def list():
     """List models"""
-    click.echo("Listing all models")
+    pass
 
 
 @cli.command(cls=_command)
@@ -154,7 +157,10 @@ def list():
 @click.help_option("-h", "--help")
 def rm(model):
     """Remove a model"""
-    click.echo(f"Removing model {model}")
+    path = which_model(model)
+    if path:
+        shell(f"rm -f {path} 2>/dev/null")
+        print(f"deleted '{model}'")
 
 
 if __name__ == "__main__":

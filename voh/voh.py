@@ -57,9 +57,9 @@ class voh(nn.Module):
         return o
 
     @classmethod
-    def load(cls, model, strict=True):
+    def load(cls, model, strict=True, direct=False):
         """Load the pre-trained"""
-        path = which_model(model)
+        path = which_model(model, direct=direct)
         o = voh()
         o.initialize()
         t = torch.load(path, map_location="cpu")
@@ -156,6 +156,11 @@ class voh(nn.Module):
             blocks_B=len(self.conf.size_kernel_blocks),
             repeats_R=self.conf.num_repeat_blocks,
         )
+        if exists(path_model(self.conf.model)):
+            dumper(
+                path=which_model(self.conf.model),
+                size=size_model(self.conf.model),
+            )
 
     def forward(self, x):
         mask = create_mask(x).to(device=self.device)
@@ -291,7 +296,7 @@ class voh(nn.Module):
 
     def save(self, model=None, snap=None):
         """Create a checkpoint"""
-        path = which_model(model or self.conf.model)
+        path = path_model(model or self.conf.model)
         mkdir(dirname(path))
         torch.save(
             dict(
