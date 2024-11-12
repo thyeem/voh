@@ -109,7 +109,11 @@ def create(model, file):
         "\nAre you sure to save this model?",
         ok=lazy(
             cf_(
-                lambda x: dumper(model=o.conf.model, path=x, size=size_model(x)),
+                lambda x: dumper(
+                    model=o.conf.model,
+                    path=x,
+                    size=size_model(o.conf.model),
+                ),
                 o.save,
             )
         ),

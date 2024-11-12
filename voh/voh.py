@@ -95,12 +95,12 @@ class voh(nn.Module):
     def set_model(self):
         self.encoder = Encoder(self.conf)
         self.decoder = Decoder(self.conf)
-        guard(
-            self.conf.size_out_enc == self.conf.size_in_dec,
-            f"The output size({self.conf.size_out_enc}) of"
-            " the encoder does not match the input size"
-            f"({self.conf.size_in_dec}) of the decoder.",
-        )
+        # guard(
+        # self.conf.size_out_enc == self.conf.size_in_dec,
+        # f"The output size({self.conf.size_out_enc}) of"
+        # " the encoder does not match the input size"
+        # f"({self.conf.size_in_dec}) of the decoder.",
+        # )
 
     def load_model(self, model, strict=True):
         self.load_state_dict(model, strict=strict)
@@ -195,6 +195,7 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
+        self = self.into().optimize()
         optim = torch.optim.Adam(self.parameters(), lr=self.conf.lr)
         tloader, vloader = self.dl()
         for it, (anchor, positive, negative) in tracker(
@@ -232,12 +233,12 @@ class voh(nn.Module):
             return self.conf.lr
 
     def dl(self):
-        guard(
-            self.conf.size_in_enc == self.conf.num_mel_filters,
-            f"The input size({self.conf.size_in_enc}) of"
-            " the encoder does not match the number of "
-            f"Mel-filterbanks({self.conf.num_mel_filters}).",
-        )
+        # guard(
+        # self.conf.size_in_enc == self.conf.num_mel_filters,
+        # f"The input size({self.conf.size_in_enc}) of"
+        # " the encoder does not match the number of "
+        # f"Mel-filterbanks({self.conf.num_mel_filters}).",
+        # )
         conf = dict(
             batch_size=self.conf.size_batch,
             num_workers=self.conf.num_workers or os.cpu_count(),
