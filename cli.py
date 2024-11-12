@@ -1,6 +1,8 @@
 import click
+from foc import *
+from ouch import *
 
-from .voh import *
+from voh import *
 
 
 # -----------------
@@ -98,7 +100,15 @@ def cli():
 )
 def create(model, file):
     """Create a model from a conf file"""
-    click.echo(f"Creating model {model} with config file {file}")
+    guard(exists(file), f"Error, not found the model conf: {file}")
+    conf = read_conf(file)
+    conf.model = model
+    o = voh.create(conf)
+    o.info()
+    prompt(
+        "\nAre you sure to create this model?",
+        ok=lazy(cf_(lambda x: dumper(name=o.conf.model, path=x), o.save)),
+    )
 
 
 @cli.command(cls=_command)

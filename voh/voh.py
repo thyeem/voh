@@ -13,51 +13,7 @@ from .model import *
 from .utils import *
 
 
-def vohconf(conf=None, **kwds):
-    o = dmap(
-        # --------------
-        # model
-        # --------------
-        model="pilot",
-        size_in_enc=None,
-        size_hidden_enc=1024,
-        size_out_enc=3072,
-        size_kernel_prolog=3,
-        size_kernel_epilog=1,
-        size_kernel_blocks=(7, 11, 15),
-        num_repeat_blocks=2,
-        ratio_reduction=8,  # SE-block reduction ratio
-        size_in_dec=None,
-        size_attn_pool=128,
-        size_out_dec=192,  # embedding size
-        # --------------
-        # data/training
-        # --------------
-        num_mel_filters=80,
-        samplerate=16000,
-        ds_train=None,
-        ds_val=None,
-        seed=42,
-        decay=True,
-        dropout=0.1,
-        margin_loss=0.5,
-        lr=1e-4,
-        lr_min=1e-5,
-        ratio_warmup=0.01,
-        steps=None,
-        epochs=None,
-        num_workers=None,
-        size_batch=16,
-        size_val=20,
-        period_val=100,
-    )
-    o = o | uniq_conf(conf, o) | uniq_conf(dict(**kwds), o)
-    o.size_in_enc = o.num_mel_filters
-    o.size_in_dec = o.size_out_enc
-    return o
-
-
-class vohDataset(Dataset):
+class _dataset(Dataset):
 
     def __init__(self, path, n_mels=80, sr=16000, size=None):
         super().__init__()
@@ -73,7 +29,10 @@ class vohDataset(Dataset):
         return tuple(self.fetch())
 
     def fetch(self):
-        return map(filterbank(n_mels=self.n_mels, sr=self.sr), triplet(self.db))
+        return map(
+            filterbank(n_mels=self.n_mels, sr=self.sr),
+            triplet(self.db),
+        )
 
 
 def collate_fn(batch):
@@ -87,11 +46,11 @@ class voh(nn.Module):
     # Setup
     # -----------
     @classmethod
-    def create(cls, conf=None, **kwds):
+    def create(cls, conf=None):
         """Create a new model"""
         o = voh()
         o.initialize()
-        o.set_conf(conf, **kwds)
+        o.set_conf(conf)
         o.set_seed()
         o.set_model()
         o.set_meta()
@@ -117,11 +76,16 @@ class voh(nn.Module):
         torch._dynamo.config.suppress_errors = True
         torch._logging.set_logs(dynamo=logging.ERROR)
 
-    def set_conf(self, conf=None, **kwds):
-        self.conf = vohconf(conf, **kwds)
+    @property
+    def refconf(self):
+        return read_conf(f"{dirname(__file__)}/../conf/pilot.conf")
+
+    def set_conf(self, conf=None):
+        o = self.refconf  # default reference conf
+        self.conf = o | uniq_conf(conf, o)
 
     def set_seed(self, seed=None):
-        seed = seed or self.conf.seed
+        seed = seed or self.conf.seed or randint(1 << 31)
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -131,6 +95,12 @@ class voh(nn.Module):
     def set_model(self):
         self.encoder = Encoder(self.conf)
         self.decoder = Decoder(self.conf)
+        guard(
+            self.conf.size_out_enc == self.conf.size_in_dec,
+            f"The output size({self.conf.size_out_enc}) of"
+            " the encoder does not match the input size"
+            f"({self.conf.size_in_dec}) of the decoder.",
+        )
 
     def load_model(self, model, strict=True):
         self.load_state_dict(model, strict=strict)
@@ -246,6 +216,12 @@ class voh(nn.Module):
             return self.conf.lr
 
     def dl(self):
+        guard(
+            self.conf.size_in_enc == self.conf.num_mel_filters,
+            f"The input size({self.conf.size_in_enc}) of"
+            " the encoder does not match the number of "
+            f"Mel-filterbanks({self.conf.num_mel_filters}).",
+        )
         conf = dict(
             batch_size=self.conf.size_batch,
             num_workers=self.conf.num_workers or os.cpu_count(),
@@ -254,12 +230,12 @@ class voh(nn.Module):
             persistent_workers=True,
             multiprocessing_context="fork",
         )
-        self.ds_train = vohDataset(
+        self.ds_train = _dataset(
             self.conf.ds_train,
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
         )
-        self.ds_val = vohDataset(
+        self.ds_val = _dataset(
             self.conf.ds_val,
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
@@ -302,11 +278,11 @@ class voh(nn.Module):
         dumper(val_loss=(f"{loss:.4f} ({self.meta.min_loss:.4f} best so far)"))
         return loss
 
-    def save(self, filepath=None, snap=None):
+    def save(self, model=None, snap=None):
         """Create a checkpoint"""
-        filepath = filepath or self.conf.model
-        d = dirname(filepath)
-        d and mkdir(d)
+        model = base58e((model or self.conf.model).encode())
+        filepath = f"{dirname(__file__)}/../o/{model}"
+        mkdir(dirname(filepath))
         torch.save(
             dict(
                 conf=dict(self.conf),
@@ -319,3 +295,4 @@ class voh(nn.Module):
             d = f"{filepath}.snap"
             mkdir(d)
             shell(f"cp -f {filepath} {d}/{basename(filepath)}{snap}")
+        return filepath
