@@ -54,21 +54,21 @@ class voh(nn.Module):
         o.set_seed()
         o.set_model()
         o.set_meta()
-        return o.into().optimize()
+        return o
 
     @classmethod
     def load(cls, model, strict=True):
         """Load the pre-trained"""
-        guard(exists(model, "f"), f"Not found model: {model}")
+        path = which_model(model)
         o = voh()
         o.initialize()
-        t = torch.load(model, map_location="cpu")
+        t = torch.load(path, map_location="cpu")
         o.set_conf(t["conf"])
         o.set_seed()
         o.set_model()
         o.load_model(t["model"], strict=strict)
         o.set_meta(t["meta"])
-        return o.into().optimize()
+        return o
 
     def initialize(self):
         torch.mps.empty_cache()
@@ -143,8 +143,19 @@ class voh(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
     def info(self):
-        dumper(encoder=self.encoder, decoder=self.decoder)
-        dumper(num_parameters=f"{self.numel:_}", **self.conf)
+        dumper(
+            model=self.conf.model,
+            parameters=f"{self.numel:_}",
+            in_enc=self.conf.size_in_enc,
+            hidden_enc=self.conf.size_hidden_enc,
+            out_enc=self.conf.size_out_enc,
+            in_dec=self.conf.size_in_dec,
+            attention_dec=self.conf.size_attn_pool,
+            out_dec=f"{self.conf.size_out_dec}  (embedding size)",
+            kernels=str(self.conf.size_kernel_blocks),
+            blocks_B=len(self.conf.size_kernel_blocks),
+            repeats_R=self.conf.num_repeat_blocks,
+        )
 
     def forward(self, x):
         mask = create_mask(x).to(device=self.device)
@@ -273,26 +284,25 @@ class voh(nn.Module):
             )
         loss /= self.conf.size_val
         if loss < self.meta.min_loss:
-            self.save(filepath=self.conf.model, snap=f"-{loss:.2f}-{it:06d}")
+            self.save(model=self.conf.model, snap=f"-{loss:.2f}-{it:06d}")
         self.meta.min_loss = min(self.meta.min_loss, loss)
         dumper(val_loss=(f"{loss:.4f} ({self.meta.min_loss:.4f} best so far)"))
         return loss
 
     def save(self, model=None, snap=None):
         """Create a checkpoint"""
-        model = base58e((model or self.conf.model).encode())
-        filepath = f"{dirname(__file__)}/../o/{model}"
-        mkdir(dirname(filepath))
+        path = which_model(model or self.conf.model)
+        mkdir(dirname(path))
         torch.save(
             dict(
                 conf=dict(self.conf),
                 meta=dict(self.meta),
                 model=self.state_dict(),
             ),
-            normpath(filepath),
+            normpath(path),
         )
         if snap:
-            d = f"{filepath}.snap"
+            d = f"{path}.snap"
             mkdir(d)
-            shell(f"cp -f {filepath} {d}/{basename(filepath)}{snap}")
-        return filepath
+            shell(f"cp -f {path} {d}/{basename(path)}{snap}")
+        return path

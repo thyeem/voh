@@ -154,6 +154,20 @@ def dumper(**kwargs):
     nprint(dmap(**kwargs), _cols=20, _sort=False)
 
 
+def which_model(model, dir="o"):
+    code = base58e(model.encode())
+    path = f"{dirname(__file__)}/../{dir}/{code}"
+    guard(exists(path), f"Error, model '{model}' not found")
+    return path
+
+
+def size_model(model):
+    path = which_model(model)
+    o = shell(f"du -hs {path} 2>/dev/null")
+    if o:
+        return o[0].split()[0]
+
+
 def read_json(f):
     return json.loads(reader(f).read())
 

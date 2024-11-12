@@ -106,8 +106,13 @@ def create(model, file):
     o = voh.create(conf)
     o.info()
     prompt(
-        "\nAre you sure to create this model?",
-        ok=lazy(cf_(lambda x: dumper(name=o.conf.model, path=x), o.save)),
+        "\nAre you sure to save this model?",
+        ok=lazy(
+            cf_(
+                lambda x: dumper(model=o.conf.model, path=x, size=size_model(x)),
+                o.save,
+            )
+        ),
     )
 
 
@@ -132,7 +137,9 @@ def train(model, file):
 @click.help_option("-h", "--help")
 def show(model):
     """Show information for a model"""
-    click.echo(f"Showing information for model {model}")
+    o = voh.load(model)
+    o.info()
+    dumper(path=which_model(model), size=size_model(model))
 
 
 @cli.command(cls=_command)
