@@ -1,4 +1,3 @@
-import ast
 import hashlib
 import json
 import math
@@ -184,7 +183,7 @@ def index_data(path, out="data.db", split=None):
     split the dataset into a training set and a validation set.
     """
     db = {}
-    for d in taskbar(ls(path), f"indexing {path}"):
+    for d in tracker(ls(path), f"indexing {path}"):
         wavs = ls(d, grep=r"\.wav$")
         if wavs:
             db[basename(d)] = wavs
@@ -215,7 +214,7 @@ def segment_data(
         keep_orig=keep_orig,
         eps=eps,
     )
-    for speaker in taskbar(ls(path), "segmenting wavs"):
+    for speaker in tracker(ls(path), "segmenting wavs"):
         wavs = ls(speaker, grep=r"\.wav$")
         parmap(f, wavs, workers=workers)
 
@@ -237,7 +236,7 @@ def segment_wav(wav, dur=4, min_dur=2.5, keep_orig=False, eps=0.1):
 @fx
 def reduce_data(path, cutoff=300, workers=None):
     """Reduce the number of wav files for each speaker."""
-    for speaker in taskbar(ls(path), "reduction"):
+    for speaker in tracker(ls(path), "reduction"):
         wavs = ls(speaker, grep=r".wav$")
         if len(wavs) > cutoff:
             wavs = shuffle(wavs)[cutoff:]
@@ -278,24 +277,6 @@ def read_memmap(f):
     sr = fp[0].view("int32").item()
     y = fp[1:]
     return y, sr
-
-
-def read_conf(f):
-    conf = dmap()
-    for s in filter(
-        cf_(not_, g_(_.startswith)("#"), str.lstrip),
-        reader(f).read().splitlines(),
-    ):
-        s = s.split("#")[0].strip()
-        key, *v = s.split(None, 1)
-        conf[key] = ast.literal_eval(v[0]) if len(v) else None
-    return conf
-
-
-def write_conf(f, conf):
-    f = writer(f)
-    for k, v in conf.items():
-        f.write(f"{k} {v if v is not None else ''}\n")
 
 
 def uniq_conf(x, o):
@@ -933,7 +914,7 @@ def mcmc_sample(model, jar, limit, size):
     a, b = choice(jar, size=2)
     corr = cosim(model, a, b)
     cache[_pair_id(a, b)] = corr
-    for i in taskbar(range(size + warmup), "MCMC sampling".rjust(COL)):
+    for i in tracker(range(size + warmup), "MCMC sampling".rjust(COL)):
         new_a, new_b = choice(jar, size=2)
         k = _pair_id(new_a, new_b)
         if k in cache:
@@ -956,7 +937,7 @@ def mcmc_sample(model, jar, limit, size):
 
 def challenge(model, refs, targets, tol, cache):
     doom = []
-    for t in taskbar(targets, "challenge".rjust(COL)):
+    for t in tracker(targets, "challenge".rjust(COL)):
         corrs = []
         for r in refs:
             k = _pair_id(r, t)

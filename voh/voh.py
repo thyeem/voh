@@ -210,7 +210,7 @@ class voh(nn.Module):
     def get_trained(self):
         optim = torch.optim.Adam(self.parameters(), lr=self.conf.lr)
         tloader, vloader = self.dl()
-        for it, (anchor, positive, negative) in taskbar(
+        for it, (anchor, positive, negative) in tracker(
             enumerate(tloader),
             "training",
             total=self.conf.steps,
@@ -284,7 +284,7 @@ class voh(nn.Module):
             return
         self.eval()
         loss = 0
-        for anchor, positive, negative in taskbar(
+        for anchor, positive, negative in tracker(
             take(self.conf.size_validate, vloader),
             "validation",
             total=self.conf.size_validate,
