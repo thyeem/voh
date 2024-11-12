@@ -7,7 +7,7 @@ conf = dmap(
     # main/data
     model="o/pilot",
     ds_train="data-train.db",
-    ds_validate="data-val.db",
+    ds_val="data-val.db",
     num_mel_filters=80,
     samplerate=16000,
     # --------------------------------------
@@ -20,7 +20,7 @@ conf = dmap(
     lr_min=1e-6,
     ratio_warmup=0.01,
     size_batch=8,
-    size_validate=20,
+    size_val=20,
     num_workers=4,
     it_val=100,
     it_log=20,

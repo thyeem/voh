@@ -1,5 +1,7 @@
 import click
 
+from .voh import *
+
 
 # -----------------
 # Customized click
@@ -85,17 +87,34 @@ def cli():
 
 @cli.command(cls=_command)
 @click.argument("model")
+@click.help_option("-h", "--help")
 @click.option(
     "-f",
     "--file",
     type=str,
     metavar="string",
-    help="Name of the conf file",
+    required=True,
+    help="Name of the configuration file for a model",
 )
-@click.help_option("-h", "--help")
 def create(model, file):
     """Create a model from a conf file"""
     click.echo(f"Creating model {model} with config file {file}")
+
+
+@cli.command(cls=_command)
+@click.argument("model")
+@click.help_option("-h", "--help")
+@click.option(
+    "-f",
+    "--file",
+    type=str,
+    metavar="string",
+    required=True,
+    help="Name of the configuration file for training",
+)
+def train(model, file):
+    """Train a model"""
+    click.echo(f"Training model {model}")
 
 
 @cli.command(cls=_command)
@@ -111,14 +130,6 @@ def show(model):
 def list():
     """List models"""
     click.echo("Listing all models")
-
-
-@cli.command(cls=_command)
-@click.argument("model")
-@click.help_option("-h", "--help")
-def train(model):
-    """Train a model"""
-    click.echo(f"Training model {model}")
 
 
 @cli.command(cls=_command)

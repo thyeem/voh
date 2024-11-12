@@ -15,29 +15,10 @@ from .utils import *
 
 def vohconf(conf=None, **kwds):
     o = dmap(
-        # main/data
-        model="o/pilot",
-        ds_train=None,
-        ds_validate=None,
-        num_mel_filters=80,
-        samplerate=16000,
-        # --------------------------------------
-        # trainer
-        seed=42,
-        decay=True,
-        dropout=0.1,
-        margin_loss=0.5,
-        lr=1e-4,
-        lr_min=1e-5,
-        ratio_warmup=0.01,
-        size_batch=16,
-        size_validate=20,
-        num_workers=None,
-        it_val=100,
-        it_log=10,
-        steps=None,
-        # --------------------------------------
-        # model architecture
+        # --------------
+        # model
+        # --------------
+        model="pilot",
         size_in_enc=None,
         size_hidden_enc=1024,
         size_out_enc=3072,
@@ -49,6 +30,26 @@ def vohconf(conf=None, **kwds):
         size_in_dec=None,
         size_attn_pool=128,
         size_out_dec=192,  # embedding size
+        # --------------
+        # data/training
+        # --------------
+        num_mel_filters=80,
+        samplerate=16000,
+        ds_train=None,
+        ds_val=None,
+        seed=42,
+        decay=True,
+        dropout=0.1,
+        margin_loss=0.5,
+        lr=1e-4,
+        lr_min=1e-5,
+        ratio_warmup=0.01,
+        steps=None,
+        epochs=None,
+        num_workers=None,
+        size_batch=16,
+        size_val=20,
+        period_val=100,
     )
     o = o | uniq_conf(conf, o) | uniq_conf(dict(**kwds), o)
     o.size_in_enc = o.num_mel_filters
@@ -86,7 +87,7 @@ class voh(nn.Module):
     # Setup
     # -----------
     @classmethod
-    def new(cls, conf=None, **kwds):
+    def create(cls, conf=None, **kwds):
         """Create a new model"""
         o = voh()
         o.initialize()
@@ -258,8 +259,8 @@ class voh(nn.Module):
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
         )
-        self.ds_validate = vohDataset(
-            self.conf.ds_validate,
+        self.ds_val = vohDataset(
+            self.conf.ds_val,
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
             size=sys.maxsize,
@@ -267,34 +268,34 @@ class voh(nn.Module):
         self.conf.steps = self.ds_train.size // self.conf.size_batch
         return (
             DataLoader(self.ds_train, **conf),
-            DataLoader(self.ds_validate, **conf),
+            DataLoader(self.ds_val, **conf),
         )
 
     def log(self, loss, it, lr):
         self.meta.avg_loss += loss
-        if not it or it % self.conf.it_log != 0:
+        if not it or it % self.conf.size_val != 0:
             return
-        self.meta.avg_loss /= self.conf.it_log
+        self.meta.avg_loss /= self.conf.size_val
         dumper(lr=f"{lr:.6f}", avg_loss=f"{self.meta.avg_loss:.4f}")
         self.meta.avg_loss = 0
 
     @torch.no_grad()
     def validate(self, vloader, it):
-        if not it or it % self.conf.it_val != 0:
+        if not it or it % self.conf.period_val != 0:
             return
         self.eval()
         loss = 0
         for anchor, positive, negative in tracker(
-            take(self.conf.size_validate, vloader),
+            take(self.conf.size_val, vloader),
             "validation",
-            total=self.conf.size_validate,
+            total=self.conf.size_val,
         ):
             loss += tripletloss(
                 self(anchor.to(self.device)),
                 self(positive.to(self.device)),
                 self(negative.to(self.device)),
             )
-        loss /= self.conf.size_validate
+        loss /= self.conf.size_val
         if loss < self.meta.min_loss:
             self.save(filepath=self.conf.model, snap=f"-{loss:.2f}-{it:06d}")
         self.meta.min_loss = min(self.meta.min_loss, loss)
