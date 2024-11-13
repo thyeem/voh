@@ -160,7 +160,9 @@ def show(model):
 @click.help_option("-h", "--help")
 def list():
     """List models"""
-    pass
+    from voh import list_models
+
+    list_models()
 
 
 @cli.command(cls=_command)

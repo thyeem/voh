@@ -172,9 +172,9 @@ def size_model(model):
 
 
 def list_models(dir=default.modelpath):
-    return [
+    data = [
         dmap(
-            name=base58d(basename(f)),
+            name=base58d(basename(f)).decode(),
             size=du_hs(f),
             modified=timeago(
                 timestamp() - timestamp(os.path.getmtime(f), to_utc=True),
@@ -182,6 +182,24 @@ def list_models(dir=default.modelpath):
         )
         for f in ls(dir, f=True)
     ]
+    keys = {k: k.upper() for k in ("name", "size", "modified")}
+    print(neatly_tbl(data, keys))
+
+
+def neatly_tbl(data, keys, gap=" " * 4, sep=False):
+    """Neatly display data in formatted manner.
+    data = [{'name': .., 'size': .., 'modified': ..}, ...]
+    keys = {'name': 'NAME', 'size': 'SIZE', 'modified': lMODIFIED'}
+    """
+    cols = [max(len(str(d[k])) for d in data + [keys]) for k in keys]
+    fmt = gap.join("{:<" + str(width) + "}" for width in cols)
+    sep = "\n" + "-" * sum(cols + [len(gap) * (len(keys) - 1)]) if sep else ""
+    return unlines(
+        flat(
+            fmt.format(*keys.values()) + sep,
+            [fmt.format(*[d[k] for k in keys]) for d in data],
+        )
+    )
 
 
 def get_conf():
