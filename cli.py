@@ -1,8 +1,4 @@
 import click
-from foc import *
-from ouch import *
-
-from voh import *
 
 
 # -----------------
@@ -100,11 +96,16 @@ def cli():
 )
 def create(model, file):
     """Create a model from a conf file"""
+    from foc import cf_, guard, lazy
+    from ouch import exists, prompt, read_conf
+
+    from voh import dumper, size_model, voh
+
     guard(exists(file), f"Error, not found the model conf: {file}")
     conf = read_conf(file)
     conf.model = model
     o = voh.create(conf)
-    o.info()
+    o.show()
     prompt(
         "\nAre you sure to save this model?",
         ok=lazy(
@@ -133,10 +134,14 @@ def create(model, file):
 )
 def train(model, file):
     """Train a model"""
+    from ouch import exists, guard, read_conf
+
+    from voh import voh
+
     guard(exists(file), f"Error, not found the train conf: {file}")
-    conf = read_conf(file)
-    o = voh.load(model)
-    o.info()
+    meta = read_conf(file)
+    o = voh.load(model).set_conf("meta", meta)
+    o.show()
     o.get_trained()
 
 
@@ -145,8 +150,10 @@ def train(model, file):
 @click.help_option("-h", "--help")
 def show(model):
     """Show information for a model"""
+    from voh import voh
+
     o = voh.load(model)
-    o.info()
+    o.show()
 
 
 @cli.command(cls=_command)
@@ -161,6 +168,10 @@ def list():
 @click.help_option("-h", "--help")
 def rm(model):
     """Remove a model"""
+    from ouch import shell
+
+    from voh import which_model
+
     path = which_model(model)
     if path:
         shell(f"rm -f {path} 2>/dev/null")

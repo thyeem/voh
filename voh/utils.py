@@ -154,14 +154,14 @@ def dumper(**kwargs):
     nprint(dmap(**kwargs), _cols=20, _sort=False)
 
 
-def which_model(model, dir="o", direct=False):
-    path = path_model(model, dir=dir, direct=direct)
+def which_model(model, dir="o"):
+    path = path_model(model, dir=dir)
     guard(exists(path), f"Error, model '{model}' not found")
     return path
 
 
-def path_model(model, dir="o", direct=False):
-    code = model if direct else base58e(model.encode())
+def path_model(model, dir="o"):
+    code = base58e(model.encode())
     return f"{dirname(__file__)}/../{dir}/{code}"
 
 
@@ -308,7 +308,7 @@ def uniq_conf(x, o):
     d = dmap(x)
     for k in x:
         if k not in o:
-            print(f"Warning, removed invalid key: '{k}'.")
+            print(f"Warning, ignored invalid key: '{k}'.")
             del d[k]
     return d
 
