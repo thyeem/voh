@@ -17,6 +17,8 @@ from pytubefix import YouTube
 from scipy.signal import butter, fftconvolve, sosfilt
 from torch.nn import functional as F
 
+from . import default
+
 
 # ----------------------
 # Fundamentals
@@ -154,28 +156,36 @@ def dumper(**kwargs):
     nprint(dmap(**kwargs), _cols=20, _sort=False)
 
 
-def which_model(model, dir="o"):
+def which_model(model, dir=default.modelpath):
     path = path_model(model, dir=dir)
     guard(exists(path), f"Error, model '{model}' not found")
     return path
 
 
-def path_model(model, dir="o"):
-    code = base58e(model.encode())
-    return f"{dirname(__file__)}/../{dir}/{code}"
+def path_model(model, dir=default.modelpath):
+    return f"{dir}/{base58e(model.encode())}"
 
 
 def size_model(model):
     path = which_model(model)
-    o = shell(f"du -hs {path} 2>/dev/null")
-    if o:
-        return o[0].split()[0]
+    return du_hs(path)
 
 
-def list_models(dir="o"):
-    fs = ls(f"{dirname(__file__)}/../{dir}", f=True)
-    for f in fs:
-        name = base58d(f)
+def list_models(dir=default.modelpath):
+    return [
+        dmap(
+            name=base58d(basename(f)),
+            size=du_hs(f),
+            modified=timeago(
+                timestamp() - timestamp(os.path.getmtime(f), to_utc=True),
+            ),
+        )
+        for f in ls(dir, f=True)
+    ]
+
+
+def get_conf():
+    return
 
 
 def read_json(f):

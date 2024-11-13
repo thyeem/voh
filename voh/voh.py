@@ -58,7 +58,7 @@ class voh(nn.Module):
         """Create a new model"""
         return (
             voh()
-            .set_conf("conf", conf)
+            .set_conf("core", conf)
             .set_conf("meta", None)
             .set_seed()
             .set_model()
@@ -71,7 +71,7 @@ class voh(nn.Module):
         t = torch.load(which_model(model), map_location="cpu")
         return (
             voh()
-            .set_conf("conf", t["conf"])
+            .set_conf("core", t["conf"])
             .set_conf("meta", t["meta"])
             .set_seed()
             .set_model()
@@ -82,7 +82,7 @@ class voh(nn.Module):
     def set_conf(self, attr, conf):
         ref = (
             defmodel()
-            if attr == "conf"
+            if attr == "core"
             else deftrain() if attr == "meta" else error("no reference.")
         )
         setattr(self, attr, ref | uniq_conf(conf, ref))
