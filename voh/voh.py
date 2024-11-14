@@ -206,7 +206,12 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        optim = torch.optim.Adam(self.parameters(), lr=self.meta.lr)
+        optim = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.meta.lr,
+            betas=self.meta.betas,
+            weight_decay=self.meta.weight_decay,
+        )
         tloader, vloader = self.dl()
         for it, (anchor, positive, negative) in tracker(
             enumerate(tloader),
