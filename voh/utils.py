@@ -128,6 +128,7 @@ def pad_(o, ipad=0):
     )
 
 
+@fx
 def sched_lr(it, lr=1e-3, lr_min=1e-5, steps=10000, warmup=1000):
     """Learning rate decay scheduler (cosine with warmup)"""
     if it < warmup:
@@ -156,18 +157,18 @@ def dumper(**kwargs):
     nprint(dmap(**kwargs), _cols=20, _sort=False)
 
 
-def which_model(model, dir=default.modelpath):
-    path = path_model(model, dir=dir)
-    guard(exists(path), f"Error, model '{model}' not found")
+def which_model(name, dir=default.modelpath):
+    path = path_model(name, dir=dir)
+    guard(exists(path), f"Error, model '{name}' not found")
     return path
 
 
-def path_model(model, dir=default.modelpath):
-    return f"{dir}/{base58e(model.encode())}"
+def path_model(name, dir=default.modelpath):
+    return f"{dir}/{base58e(name.encode())}"
 
 
-def size_model(model):
-    path = which_model(model)
+def size_model(name):
+    path = which_model(name)
     return du_hs(path)
 
 
@@ -209,14 +210,18 @@ def def_conf(kind=None):
     return dmap({k: snd(v) for k, v in default.conf.items() if cond(v)})
 
 
-def uniq_conf(x, o):
-    x = x or {}
+def uniq_conf(x, o, warn=True):
     d = dmap(x)
     for k in x:
         if k not in o:
-            print(f"Warning, ignored invalid key: '{k}'.")
+            if warn:
+                print(f"Warning, ignored invalid key: '{k}'.")
             del d[k]
     return d
+
+
+def kind_conf(x, kind):
+    return dmap({k: x[k] for k in [o for o in x if o in def_conf(kind=kind)]})
 
 
 def read_json(f):

@@ -91,29 +91,26 @@ def cli():
     "--file",
     type=str,
     metavar="string",
-    required=True,
     help="Name of the configuration file for a model",
 )
 def create(model, file):
     """Create a model from a conf file"""
-    from foc import cf_, guard, lazy
-    from ouch import exists, prompt, read_conf
+    from foc import cf_, lazy
+    from ouch import prompt, read_conf
 
     from voh import dumper, size_model, voh
 
-    guard(exists(file), f"Error, not found the model conf: {file}")
-    conf = read_conf(file)
-    conf.model = model
-    o = voh.create(conf)
+    conf = file and read_conf(file)
+    o = voh.create(model, conf)
     o.show()
     prompt(
         "\nAre you sure to save this model?",
         ok=lazy(
             cf_(
                 lambda x: dumper(
-                    model=o.conf.model,
+                    model=o.name,
                     path=x,
-                    size=size_model(o.conf.model),
+                    size=size_model(o.name),
                 ),
                 o.save,
             )
@@ -129,18 +126,24 @@ def create(model, file):
     "--file",
     type=str,
     metavar="string",
-    required=True,
     help="Name of the configuration file for training",
 )
 def train(model, file):
     """Train a model"""
-    from ouch import exists, guard, read_conf
+    from foc import error, lazy
+    from ouch import prompt, read_conf
 
     from voh import default, voh
 
-    guard(exists(file), f"Error, not found the train conf: {file}")
-    o = voh.load(model).set_conf(read_conf(file), default.META)
+    conf = file and read_conf(file)
+    o = voh.load(model).set_conf(conf, kind=default.META, warn=False)
     o.show()
+    print()
+    o.info(default.META)
+    prompt(
+        "\nWant to use the above trainer to train the model?",
+        fail=lazy(error, "Canceled."),
+    )
     o.get_trained()
 
 
@@ -165,18 +168,19 @@ def list():
 
 
 @cli.command(cls=_command)
-@click.argument("model")
+@click.argument("models", nargs=-1)
 @click.help_option("-h", "--help")
-def rm(model):
+def rm(models):
     """Remove a model"""
     from ouch import shell
 
     from voh import which_model
 
-    path = which_model(model)
-    if path:
-        shell(f"rm -f {path} 2>/dev/null")
-        print(f"deleted '{model}'")
+    for model in models:
+        path = which_model(model)
+        if path:
+            shell(f"rm -rf {path} {path}.snap 2>/dev/null")
+            print(f"deleted '{model}'")
 
 
 if __name__ == "__main__":

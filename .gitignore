@@ -30,6 +30,7 @@ dist/
 *egg-info
 
 # custom
+tmp/
 o/
 data/
 real/
