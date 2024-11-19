@@ -56,14 +56,7 @@ class voh(nn.Module):
     @classmethod
     def create(cls, conf=None):
         """Create a new model"""
-        return (
-            voh()
-            .set_conf("conf", conf)
-            .set_conf("meta", None)
-            .set_seed()
-            .set_model()
-            .get_ready()
-        )
+        return voh().set_conf(conf).set_seed().set_model().finalize()
 
     @classmethod
     def load(cls, model, strict=True):
@@ -71,21 +64,15 @@ class voh(nn.Module):
         t = torch.load(which_model(model), map_location="cpu")
         return (
             voh()
-            .set_conf("conf", t["conf"])
-            .set_conf("meta", t["meta"])
+            .set_conf(t["conf"])
             .set_seed()
             .set_model()
             .load_model(t["model"], strict=strict)
-            .get_ready()
+            .finalize()
         )
 
-    def set_conf(self, attr, conf):
-        ref = (
-            defmodel()
-            if attr == "conf"
-            else deftrain() if attr == "meta" else error("no reference.")
-        )
-        setattr(self, attr, ref | uniq_conf(conf, ref))
+    def set_conf(self, conf, kind=None):
+        self.conf = def_conf() | uniq_conf(conf, def_conf(kind=kind))
         return self
 
     def set_seed(self, seed=None):
@@ -125,9 +112,10 @@ class voh(nn.Module):
     def optimize(self):
         return torch.compile(self, backend="eager")
 
-    def get_ready(self):
+    def finalize(self):
         torch._dynamo.config.suppress_errors = True
         torch._logging.set_logs(dynamo=logging.ERROR)
+        torch._dynamo.eval_frame.OptimizedModule.__repr__ = lambda x: ""
         return self.into().optimize()
 
     # -----------
@@ -170,8 +158,10 @@ class voh(nn.Module):
             encoder=self.encoder,
             decoder=self.decoder,
             **self.conf,
-            **self.meta,
         )
+
+    def __repr__(self):
+        return ""
 
     def forward(self, x):
         mask = create_mask(x).to(device=self.device)
@@ -186,8 +176,8 @@ class voh(nn.Module):
         return (
             filterbank(
                 f,
-                n_mels=self.meta.num_mel_filters,
-                sr=self.meta.samplerate,
+                n_mels=self.conf.num_mel_filters,
+                sr=self.conf.samplerate,
             )
             .unsqueeze(0)
             .to(device=self.device)
@@ -206,17 +196,12 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        optim = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.meta.lr,
-            betas=self.meta.betas,
-            weight_decay=self.meta.weight_decay,
-        )
+        optim = self.get_optim()
         tloader, vloader = self.dl()
         for it, (anchor, positive, negative) in tracker(
             enumerate(tloader),
             "training",
-            total=self.meta.steps,
+            total=self.conf.steps,
         ):
             self.train()
             lr = self.update_lr(optim, it)
@@ -225,46 +210,68 @@ class voh(nn.Module):
                 self(anchor.to(self.device)),
                 self(positive.to(self.device)),
                 self(negative.to(self.device)),
-                margin=self.meta.margin_loss,
+                margin=self.conf.margin_loss,
             )
             loss.backward()
             optim.step()
             self.log(loss, it, lr)
             self.validate(vloader, it)
 
+    def get_optim(self):
+        o = self.conf.optim
+        return dict(
+            sgd=torch.optim.SGD(
+                self.parameters(),
+                lr=self.conf.lr,
+                weight_decay=self.conf.weight_decay,
+                momentum=self.conf.momentum,
+            ),
+            adamw=torch.optim.AdamW(
+                self.parameters(),
+                lr=self.conf.lr,
+                betas=self.conf.betas,
+                weight_decay=self.conf.weight_decay,
+            ),
+            adam=torch.optim.Adam(
+                self.parameters(),
+                lr=self.conf.lr,
+                betas=self.conf.betas,
+            ),
+        ).get(o) or error(f"No such optim supported: {o}")
+
     def update_lr(self, optim, it):
-        if self.meta.decay:
+        if self.conf.decay:
             lr = sched_lr(
                 it,
-                lr=self.meta.lr,
-                lr_min=self.meta.lr_min,
-                steps=self.meta.steps,
-                warmup=int(self.meta.steps * self.meta.ratio_warmup),
+                lr=self.conf.lr,
+                lr_min=self.conf.lr_min,
+                steps=self.conf.steps,
+                warmup=int(self.conf.steps * self.conf.ratio_warmup),
             )
             for param_group in optim.param_groups:
                 param_group["lr"] = lr
             return lr
         else:
-            return self.meta.lr
+            return self.conf.lr
 
     def dl(self):
         guard(
-            self.conf.size_in_enc == self.meta.num_mel_filters,
+            self.conf.size_in_enc == self.conf.num_mel_filters,
             f"The input size({self.conf.size_in_enc}) of"
             " the encoder does not match the number of "
-            f"Mel-filterbanks({self.meta.num_mel_filters}).",
+            f"Mel-filterbanks({self.conf.num_mel_filters}).",
         )
         guard(
-            self.meta.ds_train and exists(self.meta.ds_train),
-            f"No such training set 'ds_train', {self.meta.ds_train}",
+            self.conf.ds_train and exists(self.conf.ds_train),
+            f"No such training set 'ds_train', {self.conf.ds_train}",
         )
         guard(
-            self.meta.ds_val and exists(self.meta.ds_val),
-            f"No such validation set 'ds_val', {self.meta.ds_val}",
+            self.conf.ds_val and exists(self.conf.ds_val),
+            f"No such validation set 'ds_val', {self.conf.ds_val}",
         ),
         conf = dict(
-            batch_size=self.meta.size_batch,
-            num_workers=self.meta.num_workers or os.cpu_count(),
+            batch_size=self.conf.size_batch,
+            num_workers=self.conf.num_workers or os.cpu_count(),
             collate_fn=collate_fn,
             shuffle=False,
             prefetch_factor=1,
@@ -272,53 +279,53 @@ class voh(nn.Module):
             multiprocessing_context="fork",
         )
         self.ds_train = _dataset(
-            self.meta.ds_train,
-            n_mels=self.meta.num_mel_filters,
-            sr=self.meta.samplerate,
+            self.conf.ds_train,
+            n_mels=self.conf.num_mel_filters,
+            sr=self.conf.samplerate,
         )
         self.ds_val = _dataset(
-            self.meta.ds_val,
-            n_mels=self.meta.num_mel_filters,
-            sr=self.meta.samplerate,
+            self.conf.ds_val,
+            n_mels=self.conf.num_mel_filters,
+            sr=self.conf.samplerate,
             size=sys.maxsize,
         )
-        self.meta.steps = self.meta.steps or (
-            self.ds_train.size // self.meta.size_batch
-        )
+        self.conf.steps = (
+            self.conf.steps or (self.ds_train.size // self.conf.size_batch)
+        ) * self.conf.epochs
         return (
             DataLoader(self.ds_train, **conf),
             DataLoader(self.ds_val, **conf),
         )
 
     def log(self, loss, it, lr):
-        self.meta.avg_loss += loss
-        if not it or it % self.meta.size_val != 0:
+        self.conf.avg_loss += loss
+        if not it or it % self.conf.size_val != 0:
             return
-        self.meta.avg_loss /= self.meta.size_val
-        dumper(lr=f"{lr:.6f}", avg_loss=f"{self.meta.avg_loss:.4f}")
-        self.meta.avg_loss = 0
+        self.conf.avg_loss /= self.conf.size_val
+        dumper(lr=f"{lr:.6f}", avg_loss=f"{self.conf.avg_loss:.4f}")
+        self.conf.avg_loss = 0
 
     @torch.no_grad()
     def validate(self, vloader, it):
-        if not it or it % self.meta.period_val != 0:
+        if not it or it % self.conf.period_val != 0:
             return
         self.eval()
         loss = 0
         for anchor, positive, negative in tracker(
-            take(self.meta.size_val, vloader),
+            take(self.conf.size_val, vloader),
             "validation",
-            total=self.meta.size_val,
+            total=self.conf.size_val,
         ):
             loss += tripletloss(
                 self(anchor.to(self.device)),
                 self(positive.to(self.device)),
                 self(negative.to(self.device)),
             )
-        loss /= self.meta.size_val
-        if loss < self.meta.min_loss:
-            self.save(model=self.meta.model, snap=f"-{loss:.2f}-{it:06d}")
-        self.meta.min_loss = min(self.meta.min_loss, loss)
-        dumper(val_loss=(f"{loss:.4f} ({self.meta.min_loss:.4f} best so far)"))
+        loss /= self.conf.size_val
+        if loss < self.conf.min_loss:
+            self.save(model=self.conf.model, snap=f"-{loss:.2f}-{it:06d}")
+        self.conf.min_loss = min(self.conf.min_loss, loss)
+        dumper(val_loss=(f"{loss:.4f} ({self.conf.min_loss:.4f} best so far)"))
         return loss
 
     def save(self, model=None, snap=None):
@@ -328,7 +335,6 @@ class voh(nn.Module):
         torch.save(
             dict(
                 conf=dict(self.conf),
-                meta=dict(self.meta),
                 model=self.state_dict(),
             ),
             normpath(path),

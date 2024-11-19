@@ -136,11 +136,10 @@ def train(model, file):
     """Train a model"""
     from ouch import exists, guard, read_conf
 
-    from voh import voh
+    from voh import default, voh
 
     guard(exists(file), f"Error, not found the train conf: {file}")
-    meta = read_conf(file)
-    o = voh.load(model).set_conf("meta", meta)
+    o = voh.load(model).set_conf(read_conf(file), default.META)
     o.show()
     o.get_trained()
 

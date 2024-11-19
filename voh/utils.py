@@ -202,8 +202,21 @@ def neatly_tbl(data, keys, gap=" " * 4, sep=False):
     )
 
 
-def get_conf():
-    return
+def def_conf(kind=None):
+    def cond(x):
+        return fst(x) == kind if kind else True
+
+    return dmap({k: snd(v) for k, v in default.conf.items() if cond(v)})
+
+
+def uniq_conf(x, o):
+    x = x or {}
+    d = dmap(x)
+    for k in x:
+        if k not in o:
+            print(f"Warning, ignored invalid key: '{k}'.")
+            del d[k]
+    return d
 
 
 def read_json(f):
@@ -329,16 +342,6 @@ def read_memmap(f):
     sr = fp[0].view("int32").item()
     y = fp[1:]
     return y, sr
-
-
-def uniq_conf(x, o):
-    x = x or {}
-    d = dmap(x)
-    for k in x:
-        if k not in o:
-            print(f"Warning, ignored invalid key: '{k}'.")
-            del d[k]
-    return d
 
 
 def speaker_id(f, maxlen=24):

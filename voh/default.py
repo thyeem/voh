@@ -30,17 +30,22 @@ conf = dmap(
     seed=(META, None),
     decay=(META, True),
     margin_loss=(META, 0.7),
+    optim=(META, "sgd"),
     lr=(META, 5e-5),
     lr_min=(META, 1e-7),
+    weight_decay=(META, 2e-4),
+    momentum=(META, 0.9),
+    betas=(META, (0.9, 0.999)),
     ratio_warmup=(META, 0.01),
     steps=(META, None),
-    epochs=(META, None),
+    epochs=(META, 1),
     num_workers=(META, 8),
     size_batch=(META, 8),
     size_val=(META, 20),
     period_val=(META, 100),
     avg_loss=(META, 0),
     min_loss=(META, 99999),
+    it=(META, 0),
 )
 
 modelpath = f"{dirname(__file__)}/../o"
