@@ -222,12 +222,12 @@ class SqueezeExcite(nn.Module):
         out = cf_(
             _ * x,  # (B, C, C)
             torch.sigmoid,  # (B, C, 1)
-            g_(_.transpose)(1, -1),  # (B, C, 1)
+            ob(_.transpose)(1, -1),  # (B, C, 1)
             self.fc2,  # (B, 1, C)
             self.relu,
             self.fc1,  # (B, 1, C // reduction)
-            g_(_.transpose)(1, -1),  # (B, 1, C)
-            g_(_.mean)(dim=-1, keepdim=True),  # (B, C, 1)
+            ob(_.transpose)(1, -1),  # (B, 1, C)
+            ob(_.mean)(dim=-1, keepdim=True),  # (B, C, 1)
         )(x)
         return out
 
@@ -292,7 +292,7 @@ class AttentivePool(nn.Module):
         # attention value
         alpha = cf_(
             F.softmax,
-            g_(_.masked_fill)(mask == 0, float("-inf")),
+            ob(_.masked_fill)(mask == 0, float("-inf")),
             self.conv,
             self.tanh,
             self.tdnn,
@@ -310,7 +310,7 @@ class Embedding(nn.Module):
 
     def forward(self, x):
         return cf_(
-            g_(_.squeeze)(dim=-1),
+            ob(_.squeeze)(dim=-1),
             self.conv,
             self.bn,
         )(x)

@@ -833,7 +833,7 @@ def realwav(
     for label, url, ss, to in map(
         str.split,
         filter(
-            cf_(not_, g_(_.startswith)("#")),
+            cf_(not_, ob(_.startswith)("#")),
             reader(YOUTUBE).read().splitlines(),
         ),
     ):
