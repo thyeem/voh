@@ -1,22 +1,20 @@
 import logging
-import queue
 import random
 import sys
 import time
-from multiprocessing import Event, Manager, Process, set_start_method
+from multiprocessing import Process, Queue
 
 import torch
 from foc import *
 from ouch import *
 from torch import nn
-from torch.multiprocessing import Event, Process, Queue
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from .model import *
 from .utils import *
 
-set_start_method("fork", force=True)
+# set_start_method("fork", force=True)
 
 
 class _dataset(Dataset):
@@ -42,55 +40,51 @@ class _dataset(Dataset):
 
 
 class _dataloader:
-    def __init__(self, dl, size_buffer=100, **kwargs):
-        self.dl = DataLoader(dl, **kwargs)
-        self.buffer = Manager().Queue(maxsize=size_buffer)
+    def __init__(self, dataset, size_buffer=100, num_workers=2, **kwargs):
+        self.dataset = dataset
         self.size_buffer = size_buffer
-        self.stop = Event()
-        self.process = None
-
-    def start_process(self):
-        if self.process is None or not self.process.is_alive():
-            self.process = Process(target=self.generate)
-            self.process.start()
-
-    def generate(self):
-        while not self.stop.is_set():
-            for batch in self.dl:
-                if self.stop.is_set() or self.buffer.full():
-                    break
-                self.buffer.put(batch)
-            if self.buffer.full():
-                break
-
-    def repopulate(self):
-        self.start_process()
-        while not self.buffer.full():
-            if self.stop.is_set():
-                break
-            time.sleep(0.1)
+        self.num_workers = num_workers
+        self.kwargs = kwargs
+        self.queue = Queue(maxsize=size_buffer)
+        self.processes = []
 
     def __iter__(self):
-        self.start_process()
+        self.reset()
         return self
 
     def __next__(self):
-        if self.buffer.empty() and self.stop.is_set():
-            raise StopIteration
-        try:
-            return self.buffer.get_nowait()
-        except queue.Empty:
-            self.repopulate()
-            return self.__next__()
+        item = self.queue.get()
+        if item is None:
+            self.reset()
+            item = self.queue.get()
+        return item
 
-    def __enter__(self):
-        self.repopulate()
-        return self
+    def worker(self):
+        loader = DataLoader(self.dataset, **self.kwargs)
+        while True:
+            for item in loader:
+                self.queue.put(item)
+            self.queue.put(None)
 
-    def __exit__(self, *args):
-        self.stop.set()
-        if self.process:
-            self.process.join()
+    def start_workers(self):
+        return [
+            Process(target=self.worker, daemon=True).start()
+            for _ in range(self.num_workers)
+        ]
+
+    def stop_workers(self):
+        for p in self.processes:
+            p.terminate()
+            p.join()
+        self.processes = []
+
+    def reset(self):
+        self.stop_workers()
+        self.queue = Queue(maxsize=self.size_buffer)
+        self.processes = self.start_workers()
+
+    def __del__(self):
+        self.stop_workers()
 
 
 def collate_fn(batch):
@@ -262,8 +256,11 @@ class voh(nn.Module):
     def get_trained(self):
         optim = self.get_optim()
         tloader, vloader = self.dl()
-        for it in tracker(range(self.conf.steps), "training"):
-            anchor, positive, negative = next(tloader)
+        for it, (anchor, positive, negative) in tracker(
+            enumerate(tloader),
+            "training",
+            total=self.conf.steps,
+        ):
             self.train()
             lr = self.update_lr(optim, it)
             optim.zero_grad(set_to_none=True)
@@ -329,15 +326,12 @@ class voh(nn.Module):
         guard(
             self.conf.ds_val and exists(self.conf.ds_val),
             f"No such validation set 'ds_val', {self.conf.ds_val}",
-        ),
+        )
+
         shared = dict(
             batch_size=self.conf.size_batch,
-            num_workers=self.conf.num_workers or os.cpu_count(),
             collate_fn=collate_fn,
             shuffle=False,
-            persistent_workers=True,
-            prefetch_factor=self.conf.prefetch,
-            multiprocessing_context="fork",
         )
         return (
             _dataloader(
@@ -347,6 +341,7 @@ class voh(nn.Module):
                     sr=self.conf.samplerate,
                 ),
                 size_buffer=self.conf.period_val,
+                num_workers=self.conf.num_workers or os.cpu_count(),
                 **shared,
             ),
             _dataloader(
@@ -357,6 +352,7 @@ class voh(nn.Module):
                     size=sys.maxsize,
                 ),
                 size_buffer=self.conf.size_val,
+                num_workers=self.conf.num_workers or os.cpu_count(),
                 **shared,
             ),
         )
@@ -375,8 +371,9 @@ class voh(nn.Module):
             return
         self.eval()
         loss = 0
-        for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = next(vloader)
+        for anchor, positive, negative in tracker(
+            vloader, "validation", total=self.conf.size_val
+        ):
             loss += tripletloss(
                 self(anchor.to(self.device)),
                 self(positive.to(self.device)),

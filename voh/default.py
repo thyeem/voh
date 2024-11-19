@@ -42,7 +42,6 @@ conf = dmap(
     size_val=(META, 20),
     period_val=(META, 100),
     num_workers=(META, None),
-    prefetch=(META, 2),
     avg_loss=(META, 0),
     min_loss=(META, 99999),
     it=(META, 0),
