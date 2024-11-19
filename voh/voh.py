@@ -1,7 +1,6 @@
 import logging
 import random
 import sys
-import time
 from multiprocessing import Process, Queue
 
 import torch
@@ -14,20 +13,16 @@ from torch.utils.data import DataLoader, Dataset
 from .model import *
 from .utils import *
 
-# set_start_method("fork", force=True)
-
 
 class _dataset(Dataset):
-
-    def __init__(self, path, n_mels=80, sr=16000, size=None):
+    def __init__(self, path, n_mels=80, sr=16000):
         super().__init__()
         self.n_mels = n_mels
         self.sr = sr
         self.db = read_json(path)
-        self.size = size or len(flatl(self.db.values()))
 
     def __len__(self):
-        return self.size
+        return sys.maxsize
 
     def __getitem__(self, _):
         return tuple(self.fetch())
@@ -74,8 +69,9 @@ class _dataloader:
 
     def stop_workers(self):
         for p in self.processes:
-            p.terminate()
-            p.join()
+            if p is not None:
+                p.terminate()
+                p.join()
         self.processes = []
 
     def reset(self):
@@ -93,7 +89,6 @@ def collate_fn(batch):
 
 
 class voh(nn.Module):
-
     # -----------
     # Setup
     # -----------
@@ -232,11 +227,7 @@ class voh(nn.Module):
     def fb(self, f):
         """Load a given wav file in forms of log Mel-filterbank energies"""
         return (
-            filterbank(
-                f,
-                n_mels=self.conf.num_mel_filters,
-                sr=self.conf.samplerate,
-            )
+            filterbank(f, n_mels=self.conf.num_mel_filters, sr=self.conf.samplerate)
             .unsqueeze(0)
             .to(device=self.device)
         )
@@ -257,7 +248,7 @@ class voh(nn.Module):
         optim = self.get_optim()
         tloader, vloader = self.dl()
         for it, (anchor, positive, negative) in tracker(
-            enumerate(tloader),
+            enumerate(take(self.conf.steps)(tloader)),
             "training",
             total=self.conf.steps,
         ):
@@ -327,7 +318,6 @@ class voh(nn.Module):
             self.conf.ds_val and exists(self.conf.ds_val),
             f"No such validation set 'ds_val', {self.conf.ds_val}",
         )
-
         shared = dict(
             batch_size=self.conf.size_batch,
             collate_fn=collate_fn,
@@ -349,7 +339,6 @@ class voh(nn.Module):
                     self.conf.ds_val,
                     n_mels=self.conf.num_mel_filters,
                     sr=self.conf.samplerate,
-                    size=sys.maxsize,
                 ),
                 size_buffer=self.conf.size_val,
                 num_workers=self.conf.num_workers or os.cpu_count(),
@@ -372,7 +361,9 @@ class voh(nn.Module):
         self.eval()
         loss = 0
         for anchor, positive, negative in tracker(
-            vloader, "validation", total=self.conf.size_val
+            take(self.conf.size_val)(vloader),
+            "validation",
+            total=self.conf.size_val,
         ):
             loss += tripletloss(
                 self(anchor.to(self.device)),
