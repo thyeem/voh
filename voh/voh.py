@@ -43,7 +43,6 @@ class _dataloader:
         self.num_workers = num_workers
         self.kwargs = kwargs
         self.queue = Queue(maxsize=size_buffer)
-        self.stop = threading.Event()
         self.threads = []
 
     def __iter__(self):
@@ -51,23 +50,18 @@ class _dataloader:
         return self
 
     def __next__(self):
-        if self.stop.is_set() and self.queue.empty():
-            raise StopIteration
-        try:
-            item = self.queue.get(timeout=1)
-            if item is None:
-                raise StopIteration
-            return item
-        except Empty:
-            return self.__next__()
+        item = self.queue.get()
+        if item is None:
+            self.reset()
+            item = self.queue.get()
+        return item
 
     def worker(self):
         loader = DataLoader(self.dataset, **self.kwargs)
-        while not self.stop.is_set():
+        while True:
             for item in loader:
-                if self.stop.is_set():
-                    break
                 self.queue.put(item)
+            self.queue.put(None)
 
     def start_workers(self):
         for _ in range(self.num_workers):
@@ -76,7 +70,6 @@ class _dataloader:
             self.threads.append(t)
 
     def stop_workers(self):
-        self.stop.set()
         for t in self.threads:
             if t is not None and t.is_alive():
                 t.join()
@@ -85,7 +78,6 @@ class _dataloader:
     def reset(self):
         self.stop_workers()
         self.queue = Queue(maxsize=self.size_buffer)
-        self.stop.clear()
         self.start_workers()
 
     def __del__(self):
@@ -208,8 +200,7 @@ class voh(nn.Module):
         dtype = dtype or (
             torch.bfloat16 if torch.cuda.is_available() else torch.float32
         )
-        self.to(device=device, dtype=dtype)
-        return self
+        return self.to(device=device, dtype=dtype)
 
     def optimize(self):
         return torch.compile(self, backend="eager")
@@ -303,7 +294,7 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        tloader, vloader = bimap(cycle, cycle, self.dl())
+        tloader, vloader = self.dl()
         for _ in tracker(
             range(self.conf.steps * self.conf.epochs),
             "training",
