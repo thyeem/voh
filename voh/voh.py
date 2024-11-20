@@ -303,13 +303,13 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        tloader, vloader = self.dl()
-        for anchor, positive, negative in tracker(
-            take(self.conf.steps * self.conf.epochs)(tloader),
+        tloader, vloader = bimap(cycle, cycle, self.dl())
+        for _ in tracker(
+            range(self.conf.steps * self.conf.epochs),
             "training",
             start=self.it,
-            total=self.conf.steps * self.conf.epochs,
         ):
+            anchor, positive, negative = next(tloader)
             self.train()
             self.update_lr(self.optim)
             self.optim.zero_grad(set_to_none=True)
@@ -399,11 +399,8 @@ class voh(nn.Module):
             return
         self.eval()
         loss = 0
-        for anchor, positive, negative in tracker(
-            take(self.conf.size_val)(vloader),
-            "validation",
-            total=self.conf.size_val,
-        ):
+        for _ in tracker(range(self.conf.size_val), "validation"):
+            anchor, positive, negative = next(vloader)
             loss += tripletloss(
                 self(anchor.to(self.device)),
                 self(positive.to(self.device)),
