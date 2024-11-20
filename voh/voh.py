@@ -259,7 +259,15 @@ class voh(nn.Module):
                 encoder=self.encoder,
                 decoder=self.decoder,
             )
-        dumper(**kind_conf(self.conf, kind=kind))
+        dumper(
+            **kind_conf(self.conf, kind=kind),
+            loss=self.loss,
+            it=(
+                f"{self.it}  "
+                f"({100 * self.it / (self.conf.epochs * self.conf.steps):.2f}"
+                "% complete)"
+            ),
+        )
 
     def __repr__(self):
         return ""

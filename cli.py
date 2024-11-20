@@ -100,8 +100,7 @@ def create(model, file):
 
     from voh import dumper, size_model, voh
 
-    conf = file and read_conf(file)
-    o = voh.create(model, conf)
+    o = voh.create(model, file and read_conf(file))
     o.show()
     prompt(
         "\nAre you sure to save this model?",
