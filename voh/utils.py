@@ -130,7 +130,8 @@ def pad_(o, ipad=0):
 
 @fx
 def sched_lr(it, lr=1e-3, lr_min=1e-5, steps=10000, warmup=1000):
-    """Learning rate decay scheduler (cosine with warmup)"""
+    """Learning rate scheduler (cosine-annealing with warmup)"""
+    it %= steps
     if it < warmup:
         return lr * it / warmup
     if it > steps:

@@ -130,10 +130,14 @@ def create(model, file):
 )
 def train(model, file):
     """Train a model"""
+    import multiprocessing
+
     from foc import error, lazy
     from ouch import prompt, read_conf
 
     from voh import default, voh
+
+    multiprocessing.set_start_method("forkserver", force=True)
 
     conf = file and read_conf(file)
     o = voh.load(model).set_conf(conf, kind=default.META, warn=False)
@@ -150,12 +154,19 @@ def train(model, file):
 @cli.command(cls=_command)
 @click.argument("model")
 @click.help_option("-h", "--help")
-def show(model):
+@click.option(
+    "--full",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Display the detailed model information in full.",
+)
+def show(model, full):
     """Show information for a model"""
     from voh import voh
 
     o = voh.load(model)
-    o.show()
+    o.info() if full else o.show()
 
 
 @cli.command(cls=_command)

@@ -101,6 +101,9 @@ class voh(nn.Module):
             .set_conf(conf or dmap())
             .set_seed()
             .set_model()
+            .set_optim()
+            .set_iter()
+            .set_loss()
             .finalize()
         )
 
@@ -110,11 +113,13 @@ class voh(nn.Module):
         t = torch.load(which_model(name), map_location="cpu")
         return (
             voh()
-            .set_name(t.get("name", ""))
+            .set_name(t.get("name"))
             .set_conf(t["conf"])
             .set_seed()
-            .set_model()
-            .load_model(t["model"], strict=strict)
+            .set_model(t["model"], strict=strict)
+            .set_optim(t.get("optim"))
+            .set_iter(t.get("it"))
+            .set_loss(t.get("loss"))
             .finalize()
         )
 
@@ -134,7 +139,7 @@ class voh(nn.Module):
         torch.manual_seed(seed)
         return self
 
-    def set_model(self):
+    def set_model(self, model=None, strict=True):
         guard(
             self.conf.size_out_enc == self.conf.size_in_dec,
             f"The output size({self.conf.size_out_enc}) of"
@@ -143,10 +148,44 @@ class voh(nn.Module):
         )
         self.encoder = Encoder(self.conf)
         self.decoder = Decoder(self.conf)
+        if model:
+            self.load_state_dict(model, strict=strict)
         return self
 
-    def load_model(self, model, strict=True):
-        self.load_state_dict(model, strict=strict)
+    def set_iter(self, it=None):
+        self.it = it or 0
+        return self
+
+    def set_loss(self, loss=None):
+        self.loss = float("-inf") if loss is None else loss
+        return self
+
+    def set_optim(self, optim=None):
+        o = self.conf.optim
+        if not o:
+            self.optim = None
+            return self
+        self.optim = dict(
+            sgd=torch.optim.SGD(
+                self.parameters(),
+                lr=self.conf.lr,
+                weight_decay=self.conf.weight_decay,
+                momentum=self.conf.momentum,
+            ),
+            adamw=torch.optim.AdamW(
+                self.parameters(),
+                lr=self.conf.lr,
+                betas=self.conf.betas,
+                weight_decay=self.conf.weight_decay,
+            ),
+            adam=torch.optim.Adam(
+                self.parameters(),
+                lr=self.conf.lr,
+                betas=self.conf.betas,
+            ),
+        ).get(o) or error(f"No such optim supported: {o}")
+        if optim:
+            self.optim.load_state_dict(optim)
         return self
 
     def into(self, device=None, dtype=None, **kwargs):
@@ -245,16 +284,16 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        optim = self.get_optim()
         tloader, vloader = self.dl()
-        for it, (anchor, positive, negative) in tracker(
-            enumerate(take(self.conf.steps)(tloader)),
+        for anchor, positive, negative in tracker(
+            take(self.conf.steps * self.conf.epochs)(tloader),
             "training",
-            total=self.conf.steps,
+            start=self.it,
+            total=self.conf.steps * self.conf.epochs,
         ):
             self.train()
-            lr = self.update_lr(optim, it)
-            optim.zero_grad(set_to_none=True)
+            self.update_lr(self.optim)
+            self.optim.zero_grad(set_to_none=True)
             loss = tripletloss(
                 self(anchor.to(self.device)),
                 self(positive.to(self.device)),
@@ -262,46 +301,27 @@ class voh(nn.Module):
                 margin=self.conf.margin_loss,
             )
             loss.backward()
-            optim.step()
-            self.log(loss, it, lr)
-            self.validate(vloader, it)
+            self.optim.step()
+            self.log(loss)
+            self.validate(vloader)
+            self.it += 1
 
-    def get_optim(self):
-        o = self.conf.optim
-        return dict(
-            sgd=torch.optim.SGD(
-                self.parameters(),
-                lr=self.conf.lr,
-                weight_decay=self.conf.weight_decay,
-                momentum=self.conf.momentum,
-            ),
-            adamw=torch.optim.AdamW(
-                self.parameters(),
-                lr=self.conf.lr,
-                betas=self.conf.betas,
-                weight_decay=self.conf.weight_decay,
-            ),
-            adam=torch.optim.Adam(
-                self.parameters(),
-                lr=self.conf.lr,
-                betas=self.conf.betas,
-            ),
-        ).get(o) or error(f"No such optim supported: {o}")
-
-    def update_lr(self, optim, it):
-        if self.conf.decay:
-            lr = sched_lr(
-                it,
+    def update_lr(self, optim, force=False):
+        if not force and not self.it_interval(self.conf.int_sched_lr):
+            return
+        self.lr = (
+            sched_lr(
+                self.it,
                 lr=self.conf.lr,
                 lr_min=self.conf.lr_min,
                 steps=self.conf.steps,
                 warmup=int(self.conf.steps * self.conf.ratio_warmup),
             )
-            for param_group in optim.param_groups:
-                param_group["lr"] = lr
-            return lr
-        else:
-            return self.conf.lr
+            if self.conf.int_sched_lr
+            else self.conf.lr
+        )
+        for param_group in optim.param_groups:
+            param_group["lr"] = self.lr
 
     def dl(self):
         guard(
@@ -324,17 +344,17 @@ class voh(nn.Module):
             shuffle=False,
         )
         return (
-            _dataloader(
+            _dataloader(  # training dataloader
                 _dataset(  # training dataset
                     self.conf.ds_train,
                     n_mels=self.conf.num_mel_filters,
                     sr=self.conf.samplerate,
                 ),
-                size_buffer=self.conf.period_val,
+                size_buffer=self.conf.int_val,
                 num_workers=self.conf.num_workers or os.cpu_count(),
                 **shared,
             ),
-            _dataloader(
+            _dataloader(  # validation dataloader
                 _dataset(  # validation dataset
                     self.conf.ds_val,
                     n_mels=self.conf.num_mel_filters,
@@ -346,17 +366,17 @@ class voh(nn.Module):
             ),
         )
 
-    def log(self, loss, it, lr):
-        self.conf.avg_loss += loss
-        if not it or it % self.conf.size_val != 0:
+    def log(self, loss):
+        setattr(self, "_loss", getattr(self, "_loss", 0) + loss)
+        if not self.it_interval(self.conf.size_val):
             return
-        self.conf.avg_loss /= self.conf.size_val
-        dumper(lr=f"{lr:.6f}", avg_loss=f"{self.conf.avg_loss:.4f}")
-        self.conf.avg_loss = 0
+        self._loss /= self.conf.size_val
+        dumper(lr=f"{self.lr:.6f}", avg_loss=f"{self._loss:.4f}")
+        self._loss = 0
 
     @torch.no_grad()
-    def validate(self, vloader, it):
-        if not it or it % self.conf.period_val != 0:
+    def validate(self, vloader):
+        if not self.it_interval(self.conf.int_val):
             return
         self.eval()
         loss = 0
@@ -371,11 +391,10 @@ class voh(nn.Module):
                 self(negative.to(self.device)),
             )
         loss /= self.conf.size_val
-        if loss < self.conf.min_loss:
-            self.save(snap=f"-{loss:.2f}-{it:06d}")
-        self.conf.min_loss = min(self.conf.min_loss, loss)
-        dumper(val_loss=(f"{loss:.4f} ({self.conf.min_loss:.4f} best so far)"))
-        return loss
+        if loss < self.loss:
+            self.save(snap=f"-{loss:.2f}-{self.it:06d}")
+        self.loss = min(self.loss, loss)
+        dumper(val_loss=(f"{loss:.4f} ({self.loss:.4f} best so far)"))
 
     def save(self, name=None, snap=None):
         """Create a checkpoint"""
@@ -387,6 +406,9 @@ class voh(nn.Module):
         torch.save(
             dict(
                 name=name,
+                it=self.it,
+                loss=self.loss,
+                optim=self.optim.state_dict() if self.optim else None,
                 conf=dict(self.conf),
                 model=self.state_dict(),
             ),
@@ -397,3 +419,6 @@ class voh(nn.Module):
             mkdir(d)
             shell(f"cp -f {path} {d}/{basename(path)}{snap}")
         return path
+
+    def it_interval(self, val):
+        return self.it and self.it % val == 0
