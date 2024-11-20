@@ -197,8 +197,8 @@ class voh(nn.Module):
             self.optim.load_state_dict(optim)
         return self
 
-    def into(self, device=None, dtype=None, **kwargs):
-        """set a default dtype and device based on availability"""
+    def into(self, device=None, dtype=None):
+        """Set the data type and device for all tensors based on availability"""
         device = device or (
             "cuda"
             if torch.cuda.is_available()
@@ -207,7 +207,8 @@ class voh(nn.Module):
         dtype = dtype or (
             torch.bfloat16 if torch.cuda.is_available() else torch.float32
         )
-        return self.to(device=device, dtype=dtype, **kwargs)
+        self.to(device=device, dtype=dtype)
+        return self
 
     def optimize(self):
         return torch.compile(self, backend="eager")
