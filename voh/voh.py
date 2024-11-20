@@ -265,7 +265,8 @@ class voh(nn.Module):
         return ""
 
     def forward(self, x):
-        mask = create_mask(x).to(device=self.device)
+        x = x.to(device=self.device)
+        mask = create_mask(x)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
@@ -304,9 +305,9 @@ class voh(nn.Module):
             self.update_lr(self.optim)
             self.optim.zero_grad(set_to_none=True)
             loss = tripletloss(
-                self(anchor.to(self.device)),
-                self(positive.to(self.device)),
-                self(negative.to(self.device)),
+                self(anchor),
+                self(positive),
+                self(negative),
                 margin=self.conf.margin_loss,
             )
             loss.backward()
@@ -327,9 +328,10 @@ class voh(nn.Module):
             total=self.conf.size_val,
         ):
             loss += tripletloss(
-                self(anchor.to(self.device)),
-                self(positive.to(self.device)),
-                self(negative.to(self.device)),
+                self(anchor),
+                self(positive),
+                self(negative),
+                margin=self.conf.margin_loss,
             )
         loss /= self.conf.size_val
         if loss < self.loss:
