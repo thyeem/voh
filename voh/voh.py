@@ -36,34 +36,38 @@ class _dataset(Dataset):
 
 
 class _dataloader:
-    SENTINEL = object()
 
     def __init__(self, dataset, size_buffer=100, num_workers=2, **kwargs):
+        self.dataset = dataset
+        self.size_buffer = size_buffer
+        self.num_workers = num_workers
+        self.kwargs = kwargs
         self.queue = Queue(maxsize=size_buffer)
         self.stop = threading.Event()
-        self.num_workers = num_workers
         self.threads = []
-        self.loader = DataLoader(dataset, **kwargs)
 
     def __iter__(self):
         self.reset()
         return self
 
     def __next__(self):
+        if self.stop.is_set() and self.queue.empty():
+            raise StopIteration
         try:
-            item = self.queue.get(timeout=10)
-            if item is self.SENTINEL:
+            item = self.queue.get(timeout=1)
+            if time is None:
                 raise StopIteration
             return item
         except Empty:
-            return StopIteration
+            return self.__next__()
 
     def worker(self):
-        for item in self.loader:
-            if self.stop.is_set():
-                break
-            self.queue.put(item)
-        self.queue.put(self.SENTINEL)
+        loader = DataLoader(self.dataset, **self.kwargs)
+        while not self.stop.is_set():
+            for item in self.loader:
+                if self.stop.is_set():
+                    break
+                self.queue.put(item)
 
     def start_workers(self):
         for _ in range(self.num_workers):
@@ -73,18 +77,15 @@ class _dataloader:
 
     def stop_workers(self):
         self.stop.set()
-        for _ in self.threads:
-            try:
-                self.queue.put(self.SENTINEL, block=False)
-            except Exception:
-                pass
         for t in self.threads:
-            t.join()
+            if t is not None and t.is_alive():
+                t.join()
         self.threads.clear()
-        self.stop.clear()
 
     def reset(self):
         self.stop_workers()
+        self.queue = Queue(maxsize=self.size_buffer)
+        self.stop.clear()
         self.start_workers()
 
     def __del__(self):
