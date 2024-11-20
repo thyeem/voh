@@ -1,7 +1,8 @@
 import logging
 import random
 import sys
-from multiprocessing import Process, Queue
+import threading
+from queue import Queue
 
 import torch
 from foc import *
@@ -41,7 +42,7 @@ class _dataloader:
         self.num_workers = num_workers
         self.kwargs = kwargs
         self.queue = Queue(maxsize=size_buffer)
-        self.processes = []
+        self.threads = []
 
     def __iter__(self):
         self.reset()
@@ -63,21 +64,20 @@ class _dataloader:
 
     def start_workers(self):
         return [
-            Process(target=self.worker, daemon=True).start()
+            threading.Thread(target=self.worker, daemon=True).start()
             for _ in range(self.num_workers)
         ]
 
     def stop_workers(self):
-        for p in self.processes:
-            if p is not None:
-                p.terminate()
-                p.join()
-        self.processes = []
+        for t in self.threads:
+            if t is not None and t.is_alive():
+                t.join()
+        self.threads = []
 
     def reset(self):
         self.stop_workers()
         self.queue = Queue(maxsize=self.size_buffer)
-        self.processes = self.start_workers()
+        self.threads = self.start_workers()
 
     def __del__(self):
         self.stop_workers()
@@ -108,13 +108,14 @@ class voh(nn.Module):
         )
 
     @classmethod
-    def load(cls, name, strict=True):
+    def load(cls, name, conf=None, strict=True):
         """Load the pre-trained"""
         t = torch.load(which_model(name), map_location="cpu")
         return (
             voh()
             .set_name(t.get("name"))
             .set_conf(t["conf"])
+            .set_conf(conf or dmap(), kind=default.META, warn=False)
             .set_seed()
             .set_model(t["model"], strict=strict)
             .set_optim(t.get("optim"))
@@ -157,7 +158,7 @@ class voh(nn.Module):
         return self
 
     def set_loss(self, loss=None):
-        self.loss = float("-inf") if loss is None else loss
+        self.loss = float("inf") if loss is None else loss
         return self
 
     def set_optim(self, optim=None):

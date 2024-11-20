@@ -130,17 +130,13 @@ def create(model, file):
 )
 def train(model, file):
     """Train a model"""
-    import multiprocessing
 
     from foc import error, lazy
     from ouch import prompt, read_conf
 
     from voh import default, voh
 
-    multiprocessing.set_start_method("forkserver", force=True)
-
-    conf = file and read_conf(file)
-    o = voh.load(model).set_conf(conf, kind=default.META, warn=False)
+    o = voh.load(model, file and read_conf(file))
     o.show()
     print()
     o.info(default.META)
