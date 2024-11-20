@@ -2,7 +2,7 @@ import logging
 import random
 import sys
 import threading
-from queue import Queue
+from queue import Empty, Queue
 
 import torch
 from foc import *
@@ -36,37 +36,34 @@ class _dataset(Dataset):
 
 
 class _dataloader:
+    SENTINEL = object()
+
     def __init__(self, dataset, size_buffer=100, num_workers=2, **kwargs):
-        self.dataset = dataset
-        self.size_buffer = size_buffer
-        self.num_workers = num_workers
-        self.kwargs = kwargs
         self.queue = Queue(maxsize=size_buffer)
-        self.stop = False
+        self.stop = threading.Event()
+        self.num_workers = num_workers
         self.threads = []
+        self.loader = DataLoader(dataset, **kwargs)
 
     def __iter__(self):
         self.reset()
         return self
 
     def __next__(self):
-        if self.stop and self.queue.empty():
-            raise StopIteration
         try:
-            item = self.queue.get(timeout=1)
-            if item is None:
+            item = self.queue.get(timeout=10)
+            if item is self.SENTINEL:
                 raise StopIteration
             return item
-        except:
-            return None
+        except Empty:
+            return StopIteration
 
     def worker(self):
-        loader = DataLoader(self.dataset, **self.kwargs)
-        for item in loader:
-            if self.stop:
+        for item in self.loader:
+            if self.stop.is_set():
                 break
             self.queue.put(item)
-        self.queue.put(None)
+        self.queue.put(self.SENTINEL)
 
     def start_workers(self):
         for _ in range(self.num_workers):
@@ -75,16 +72,19 @@ class _dataloader:
             self.threads.append(t)
 
     def stop_workers(self):
-        self.stop = True
+        self.stop.set()
+        for _ in self.threads:
+            try:
+                self.queue.put(self.SENTINEL, block=False)
+            except Exception:
+                pass
         for t in self.threads:
-            if t is not None and t.is_alive():
-                t.join()
-        self.threads = []
+            t.join()
+        self.threads.clear()
+        self.stop.clear()
 
     def reset(self):
         self.stop_workers()
-        self.queue = Queue(maxsize=self.size_buffer)
-        self.stop = False
         self.start_workers()
 
     def __del__(self):
