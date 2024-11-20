@@ -55,7 +55,7 @@ class _dataloader:
             raise StopIteration
         try:
             item = self.queue.get(timeout=1)
-            if time is None:
+            if item is None:
                 raise StopIteration
             return item
         except Empty:
@@ -64,7 +64,7 @@ class _dataloader:
     def worker(self):
         loader = DataLoader(self.dataset, **self.kwargs)
         while not self.stop.is_set():
-            for item in self.loader:
+            for item in loader:
                 if self.stop.is_set():
                     break
                 self.queue.put(item)
