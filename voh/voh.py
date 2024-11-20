@@ -42,6 +42,7 @@ class _dataloader:
         self.num_workers = num_workers
         self.kwargs = kwargs
         self.queue = Queue(maxsize=size_buffer)
+        self.stop = False
         self.threads = []
 
     def __iter__(self):
@@ -49,26 +50,32 @@ class _dataloader:
         return self
 
     def __next__(self):
-        item = self.queue.get()
-        if item is None:
-            self.reset()
-            item = self.queue.get()
-        return item
+        if self.stop and self.queue.empty():
+            raise StopIteration
+        try:
+            item = self.queue.get(timeout=1)
+            if item is None:
+                raise StopIteration
+            return item
+        except:
+            return None
 
     def worker(self):
         loader = DataLoader(self.dataset, **self.kwargs)
-        while True:
-            for item in loader:
-                self.queue.put(item)
-            self.queue.put(None)
+        for item in loader:
+            if self.stop:
+                break
+            self.queue.put(item)
+        self.queue.put(None)
 
     def start_workers(self):
-        return [
-            threading.Thread(target=self.worker, daemon=True).start()
-            for _ in range(self.num_workers)
-        ]
+        for _ in range(self.num_workers):
+            t = threading.Thread(target=self.worker, daemon=True)
+            t.start()
+            self.threads.append(t)
 
     def stop_workers(self):
+        self.stop = True
         for t in self.threads:
             if t is not None and t.is_alive():
                 t.join()
@@ -77,7 +84,8 @@ class _dataloader:
     def reset(self):
         self.stop_workers()
         self.queue = Queue(maxsize=self.size_buffer)
-        self.threads = self.start_workers()
+        self.stop = False
+        self.start_workers()
 
     def __del__(self):
         self.stop_workers()
