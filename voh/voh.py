@@ -2,7 +2,7 @@ import logging
 import random
 import sys
 import threading
-from queue import Empty, Queue
+from queue import Queue
 
 import torch
 from foc import *
@@ -36,7 +36,6 @@ class _dataset(Dataset):
 
 
 class _dataloader:
-
     def __init__(self, dataset, size_buffer=100, num_workers=2, **kwargs):
         self.dataset = dataset
         self.size_buffer = size_buffer
@@ -64,21 +63,21 @@ class _dataloader:
             self.queue.put(None)
 
     def start_workers(self):
-        for _ in range(self.num_workers):
-            t = threading.Thread(target=self.worker, daemon=True)
-            t.start()
-            self.threads.append(t)
+        return [
+            threading.Thread(target=self.worker, daemon=True).start()
+            for _ in range(self.num_workers)
+        ]
 
     def stop_workers(self):
         for t in self.threads:
             if t is not None and t.is_alive():
                 t.join()
-        self.threads.clear()
+        self.threads = []
 
     def reset(self):
         self.stop_workers()
         self.queue = Queue(maxsize=self.size_buffer)
-        self.start_workers()
+        self.threads = self.start_workers()
 
     def __del__(self):
         self.stop_workers()
@@ -295,12 +294,12 @@ class voh(nn.Module):
     # -----------
     def get_trained(self):
         tloader, vloader = self.dl()
-        for _ in tracker(
-            range(self.conf.steps * self.conf.epochs),
+        for anchor, positive, negative in tracker(
+            take(self.conf.steps * self.conf.epochs)(tloader),
             "training",
             start=self.it,
+            total=self.conf.steps * self.conf.epochs,
         ):
-            anchor, positive, negative = next(tloader)
             self.train()
             self.update_lr(self.optim)
             self.optim.zero_grad(set_to_none=True)
@@ -315,6 +314,28 @@ class voh(nn.Module):
             self.log(loss)
             self.validate(vloader)
             self.it += 1
+
+    @torch.no_grad()
+    def validate(self, vloader):
+        if not self.it_interval(self.conf.int_val):
+            return
+        self.eval()
+        loss = 0
+        for anchor, positive, negative in tracker(
+            take(self.conf.size_val)(vloader),
+            "validation",
+            total=self.conf.size_val,
+        ):
+            loss += tripletloss(
+                self(anchor.to(self.device)),
+                self(positive.to(self.device)),
+                self(negative.to(self.device)),
+            )
+        loss /= self.conf.size_val
+        if loss < self.loss:
+            self.save(snap=f"-{loss:.2f}-{self.it:06d}")
+        self.loss = min(self.loss, loss)
+        dumper(val_loss=(f"{loss:.4f} ({self.loss:.4f} best so far)"))
 
     def update_lr(self, optim, force=False):
         if not force and not self.it_interval(self.conf.int_sched_lr):
@@ -383,25 +404,6 @@ class voh(nn.Module):
         self._loss /= self.conf.size_val
         dumper(lr=f"{self.lr:.6f}", avg_loss=f"{self._loss:.4f}")
         self._loss = 0
-
-    @torch.no_grad()
-    def validate(self, vloader):
-        if not self.it_interval(self.conf.int_val):
-            return
-        self.eval()
-        loss = 0
-        for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = next(vloader)
-            loss += tripletloss(
-                self(anchor.to(self.device)),
-                self(positive.to(self.device)),
-                self(negative.to(self.device)),
-            )
-        loss /= self.conf.size_val
-        if loss < self.loss:
-            self.save(snap=f"-{loss:.2f}-{self.it:06d}")
-        self.loss = min(self.loss, loss)
-        dumper(val_loss=(f"{loss:.4f} ({self.loss:.4f} best so far)"))
 
     def save(self, name=None, snap=None):
         """Create a checkpoint"""
