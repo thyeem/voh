@@ -1,6 +1,5 @@
 import logging
 import random
-import sys
 import threading
 from queue import Queue
 
@@ -9,30 +8,23 @@ from foc import *
 from ouch import *
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, IterableDataset
 
 from .model import *
 from .utils import *
 
 
-class _dataset(Dataset):
+class _dataset(IterableDataset):
     def __init__(self, path, n_mels=80, sr=16000):
         super().__init__()
         self.n_mels = n_mels
         self.sr = sr
         self.db = read_json(path)
+        self.preprocessor = filterbank(n_mels=n_mels, sr=sr)
 
-    def __len__(self):
-        return sys.maxsize
-
-    def __getitem__(self, _):
-        return tuple(self.fetch())
-
-    def fetch(self):
-        return map(
-            filterbank(n_mels=self.n_mels, sr=self.sr),
-            triplet(self.db),
-        )
+    def __iter__(self):
+        while True:
+            yield tuple(map(self.preprocessor, triplet(self.db)))
 
 
 class _dataloader:
@@ -55,6 +47,10 @@ class _dataloader:
             item = self.queue.get()
         return item
 
+    def set_dataset(dataset):
+        self.dataset = dataset
+        self.reset()
+
     def worker(self):
         loader = DataLoader(self.dataset, **self.kwargs)
         while True:
@@ -63,10 +59,11 @@ class _dataloader:
             self.queue.put(None)
 
     def start_workers(self):
-        return [
-            threading.Thread(target=self.worker, daemon=True).start()
+        for t in (
+            threading.Thread(target=self.worker, daemon=True)
             for _ in range(self.num_workers)
-        ]
+        ):
+            t.start()
 
     def stop_workers(self):
         for t in self.threads:
@@ -296,7 +293,7 @@ class voh(nn.Module):
     def get_trained(self):
         tloader, vloader = self.dl()
         for anchor, positive, negative in tracker(
-            take(self.conf.steps * self.conf.epochs)(tloader),
+            tloader,
             "training",
             start=self.it,
             total=self.conf.steps * self.conf.epochs,
@@ -322,11 +319,8 @@ class voh(nn.Module):
             return
         self.eval()
         loss = 0
-        for anchor, positive, negative in tracker(
-            take(self.conf.size_val)(vloader),
-            "validation",
-            total=self.conf.size_val,
-        ):
+        for _ in tracker(range(self.conf.size_val), "validation"):
+            anchor, positive, negative = next(vloader)
             loss += tripletloss(
                 self(anchor),
                 self(positive),
