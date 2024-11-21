@@ -41,7 +41,7 @@ conf = dmap(
     size_batch=(META, 8),
     size_val=(META, 20),  # also interval of logging
     int_val=(META, 100),  # interval of validation
-    num_workers=(META, None),
+    num_workers=(META, 2),
 )
 
 modelpath = f"{dirname(__file__)}/../o"

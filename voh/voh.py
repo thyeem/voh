@@ -1,98 +1,17 @@
 import logging
-import queue
+import multiprocessing as mp
 import random
-from concurrent.futures import ThreadPoolExecutor
-from threading import Event
 
 import torch
 from foc import *
 from ouch import *
-from torch import nn
 from torch.nn import functional as F
 
+from .dl import _dataloader, _dataset
 from .model import *
 from .utils import *
 
-
-class _dataset:
-    def __init__(self, path, n_mels=80, sr=16000, size_batch=1):
-        super().__init__()
-        self.n_mels = n_mels
-        self.sr = sr
-        self.db = read_json(path)
-        self.preprocessor = filterbank(n_mels=n_mels, sr=sr)
-        self.size_batch = size_batch
-
-    def __iter__(self):
-        while True:
-            with torch.no_grad():
-                anchors, positives, negatives = zip(
-                    *(
-                        map(self.preprocessor, triplet(self.db))
-                        for _ in range(self.size_batch)
-                    )
-                )
-                yield (
-                    pad_(anchors),
-                    pad_(positives),
-                    pad_(negatives),
-                )
-
-
-class _dataloader:
-    def __init__(self, dataset, size_buffer=32, num_workers=2):
-        self.dataset = dataset
-        self.num_workers = num_workers
-        self.executor = None
-        self.queue = queue.Queue(maxsize=size_buffer)
-        self.stop = Event()
-
-    def __iter__(self):
-        self.stop_workers()
-        self.start_workers()
-        return self
-
-    def __next__(self):
-        item = self.queue.get()
-        if item is None:
-            if self.stop.is_set():
-                raise StopIteration
-            self.stop_workers()
-            self.start_workers()
-            item = self.queue.get()
-        return item
-
-    def worker(self):
-        for item in self.dataset:
-            if self.stop.is_set():
-                break
-            self.queue.put(item, timeout=1)
-        self.queue.put(None)
-
-    def start_workers(self):
-        self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
-        for _ in range(self.num_workers):
-            self.executor.submit(self.worker)
-
-    def stop_workers(self):
-        self.stop.set()
-        if self.executor:
-            self.executor.shutdown(wait=False)
-            self.executor = None
-        self.clear_queue()
-        self.stop.clear()
-
-    def clear_queue(self):
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                break
-
-    def __del__(self):
-        self.stop_workers()
-        if self.executor:
-            self.executor.shutdown(wait=True)
+mp.set_start_method("fork", force=True)
 
 
 class voh(nn.Module):
@@ -206,6 +125,10 @@ class voh(nn.Module):
         dtype = dtype or (
             torch.bfloat16 if torch.cuda.is_available() else torch.float32
         )
+        for state in self.optim.state.values():  # update optimize's state
+            for k, v in state.items():
+                if isinstance(v, torch.Tensor):
+                    state[k] = v.to(device)
         return self.to(device=device, dtype=dtype)
 
     def optimize(self):
@@ -301,59 +224,45 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        tloader, vloader = self.dl()
-        for i, (anchor, positive, negative) in enumerate(tloader):
-            print(f"training {i}", end="\r")
-            self.train()
-            self.update_lr(self.optim)
-            self.optim.zero_grad(set_to_none=True)
-            loss = tripletloss(
-                self(anchor),
-                self(positive),
-                self(negative),
-                margin=self.conf.margin_loss,
-            )
-            loss.backward()
-            self.optim.step()
-            self.log(loss)
-            if self.it_interval(self.conf.int_val):
-                self.eval()
-                loss = 0
-                for i, (anchor, positive, negative) in enumerate(vloader):
-                    print(f"evaluation {i}", end="\r")
-                    loss += tripletloss(
-                        self(anchor),
-                        self(positive),
-                        self(negative),
-                        margin=self.conf.margin_loss,
-                    )
-                    if i == self.conf.size_val:
-                        break
-                loss /= self.conf.size_val
-                if loss < self.loss:
-                    self.save(snap=f"-{loss:.2f}-{self.it:06d}")
-                self.loss = min(self.loss, loss)
-                dumper(val_loss=(f"{loss:.4f} ({self.loss:.4f} best so far)"))
-            self.it += 1
+        tl, vl = self.dl()  # dataloader: (training, validation)
+        g = self.conf.steps * self.conf.epochs  # global steps
+        with tl, vl:
+            vl.pause()
+            for _ in tracker(range(g), "training", start=self.it, total=g):
+                anchor, positive, negative = next(tl)
+                self.train()
+                self.update_lr(self.optim)
+                self.optim.zero_grad(set_to_none=True)
+                loss = tripletloss(
+                    self(anchor),
+                    self(positive),
+                    self(negative),
+                    margin=self.conf.margin_loss,
+                )
+                loss.backward()
+                self.optim.step()
+                self.log(loss)
+                self.validate(tl, vl)
+                self.it += 1
 
     @torch.no_grad()
-    def validate(self, vloader):
+    def validate(self, tl, vl):
         if not self.it_interval(self.conf.int_val):
             return
         self.eval()
+        tl.pause()
+        vl.resume()
         loss = 0
-        for i, (anchor, positive, negative) in tracker(
-            enumerate(vloader),
-            "validation",
-        ):
+        for _ in tracker(range(self.conf.size_val), "validation"):
+            anchor, positive, negative = next(vl)
             loss += tripletloss(
                 self(anchor),
                 self(positive),
                 self(negative),
                 margin=self.conf.margin_loss,
             )
-            if i == self.conf.size_val:
-                break
+        vl.pause()
+        tl.resume()
         loss /= self.conf.size_val
         if loss < self.loss:
             self.save(snap=f"-{loss:.2f}-{self.it:06d}")
@@ -398,8 +307,8 @@ class voh(nn.Module):
             size_batch=self.conf.size_batch,
         )
         kwdl = dict(  # shared keywords for dataloader
-            size_buffer=self.conf.size_batch,
-            num_workers=self.conf.num_workers or os.cpu_count(),
+            size_queue=self.conf.size_batch,
+            num_workers=self.conf.num_workers,
         )
         return (
             _dataloader(_dataset(self.conf.ds_train, **kwds), **kwdl),

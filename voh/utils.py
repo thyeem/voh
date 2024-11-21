@@ -212,13 +212,14 @@ def def_conf(kind=None):
 
 
 def uniq_conf(x, o, warn=True):
-    d = dmap(x)
+    conf = dmap()
     for k in x:
-        if k not in o:
+        if k in o:
+            conf[k] = o[k] if x[k] is None else x[k]
+        else:
             if warn:
                 print(f"Warning, ignored invalid key: '{k}'.")
-            del d[k]
-    return d
+    return conf
 
 
 def kind_conf(x, kind):
