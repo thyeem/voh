@@ -1,43 +1,53 @@
 import logging
+import queue
 import random
-import threading
-from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
 
 import torch
 from foc import *
 from ouch import *
 from torch import nn
 from torch.nn import functional as F
-from torch.utils.data import DataLoader, IterableDataset
 
 from .model import *
 from .utils import *
 
 
-class _dataset(IterableDataset):
-    def __init__(self, path, n_mels=80, sr=16000):
+class _dataset:
+    def __init__(self, path, n_mels=80, sr=16000, size_batch=1):
         super().__init__()
         self.n_mels = n_mels
         self.sr = sr
         self.db = read_json(path)
         self.preprocessor = filterbank(n_mels=n_mels, sr=sr)
+        self.size_batch = size_batch
 
     def __iter__(self):
         while True:
-            yield tuple(map(self.preprocessor, triplet(self.db)))
+            with torch.no_grad():
+                anchors, positives, negatives = zip(
+                    *[
+                        tuple(map(self.preprocessor, triplet(self.db)))
+                        for _ in range(self.size_batch)
+                    ]
+                )
+                yield (
+                    pad_(anchors),
+                    pad_(positives),
+                    pad_(negatives),
+                )
 
 
 class _dataloader:
-    def __init__(self, dataset, size_buffer=100, num_workers=2, **kwargs):
-        self.dataset = dataset
+    def __init__(self, datasets=None, size_buffer=400, num_workers=2):
+        self.datasets = datasets  # (train_set, val_set)
+        self.dataset = None
         self.size_buffer = size_buffer
         self.num_workers = num_workers
-        self.kwargs = kwargs
-        self.queue = Queue(maxsize=size_buffer)
-        self.threads = []
+        self.queue = queue.Queue(maxsize=size_buffer)
+        self.executor = None
 
     def __iter__(self):
-        self.reset()
         return self
 
     def __next__(self):
@@ -47,42 +57,46 @@ class _dataloader:
             item = self.queue.get()
         return item
 
-    def set_dataset(dataset):
-        self.dataset = dataset
+    def train(self):
+        self.dataset = self.datasets[0]
         self.reset()
+        return self
+
+    def eval(self):
+        self.dataset = self.datasets[1]
+        self.reset()
+        return self
 
     def worker(self):
-        loader = DataLoader(self.dataset, **self.kwargs)
-        while True:
-            for item in loader:
-                self.queue.put(item)
-            self.queue.put(None)
+        if self.dataset is not None:
+            for item in self.dataset:
+                try:
+                    self.queue.put(item, timeout=1)
+                except queue.Full:
+                    continue
+        self.queue.put(None)
 
     def start_workers(self):
-        for t in (
-            threading.Thread(target=self.worker, daemon=True)
-            for _ in range(self.num_workers)
-        ):
-            t.start()
+        self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
+        for _ in range(self.num_workers):
+            self.executor.submit(self.worker)
 
     def stop_workers(self):
-        for t in self.threads:
-            if t is not None and t.is_alive():
-                t.join()
-        self.threads = []
+        if self.executor:
+            self.executor.shutdown(wait=False)
+            self.executor = None
+        while not self.queue.empty():
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
 
     def reset(self):
         self.stop_workers()
-        self.queue = Queue(maxsize=self.size_buffer)
-        self.threads = self.start_workers()
+        self.start_workers()
 
     def __del__(self):
         self.stop_workers()
-
-
-def collate_fn(batch):
-    anchor, positive, negative = zip(*batch)
-    return pad_(anchor), pad_(positive), pad_(negative)
 
 
 class voh(nn.Module):
@@ -291,13 +305,18 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        tloader, vloader = self.dl()
-        for anchor, positive, negative in tracker(
-            tloader,
+        dl = self.dl()  # daatloader
+        for _ in tracker(
+            range(self.conf.steps * self.conf.epochs),
             "training",
             start=self.it,
-            total=self.conf.steps * self.conf.epochs,
         ):
+            if dl.dataset is None:
+                dl.train()
+
+            print("Loop")
+            anchor, positive, negative = next(dl)
+
             self.train()
             self.update_lr(self.optim)
             self.optim.zero_grad(set_to_none=True)
@@ -366,31 +385,19 @@ class voh(nn.Module):
             f"No such validation set 'ds_val', {self.conf.ds_val}",
         )
         shared = dict(
-            batch_size=self.conf.size_batch,
+            n_mels=self.conf.num_mel_filters,
+            sr=self.conf.samplerate,
+            size_batch=self.conf.size_batch,
+        )
+        return _dataloader(
+            datasets=(
+                _dataset(self.conf.ds_train, **shared),  # training set
+                _dataset(self.conf.ds_val, **shared),  # validation set
+            ),
+            size_buffer=500,
+            num_workers=self.conf.num_workers or os.cpu_count(),
             collate_fn=collate_fn,
             shuffle=False,
-        )
-        return (
-            _dataloader(  # training dataloader
-                _dataset(  # training dataset
-                    self.conf.ds_train,
-                    n_mels=self.conf.num_mel_filters,
-                    sr=self.conf.samplerate,
-                ),
-                size_buffer=self.conf.int_val,
-                num_workers=self.conf.num_workers or os.cpu_count(),
-                **shared,
-            ),
-            _dataloader(  # validation dataloader
-                _dataset(  # validation dataset
-                    self.conf.ds_val,
-                    n_mels=self.conf.num_mel_filters,
-                    sr=self.conf.samplerate,
-                ),
-                size_buffer=self.conf.size_val,
-                num_workers=self.conf.num_workers or os.cpu_count(),
-                **shared,
-            ),
         )
 
     def log(self, loss):
