@@ -27,8 +27,8 @@ class voh(nn.Module):
             .set_conf(conf or dmap())
             .set_seed()
             .set_model()
-            .set_optim()
             .set_iter()
+            .set_optim()
             .set_loss()
             .finalize()
         )
@@ -44,8 +44,8 @@ class voh(nn.Module):
             .set_conf(conf or dmap(), kind=default.META, warn=False)
             .set_seed()
             .set_model(t["model"], strict=strict)
-            .set_optim(t.get("optim"))
             .set_iter(t.get("it"))
+            .set_optim(t.get("optim"))
             .set_loss(t.get("loss"))
             .finalize()
         )
@@ -113,6 +113,7 @@ class voh(nn.Module):
         ).get(o) or error(f"No such optim supported: {o}")
         if optim:
             self.optim.load_state_dict(optim)
+        self.update_lr(force=True)
         return self
 
     def into(self, device=None, dtype=None):
@@ -125,10 +126,11 @@ class voh(nn.Module):
         dtype = dtype or (
             torch.bfloat16 if torch.cuda.is_available() else torch.float32
         )
-        for state in self.optim.state.values():  # update optimize's state
-            for k, v in state.items():
-                if isinstance(v, torch.Tensor):
-                    state[k] = v.to(device)
+        if hasattr(self.optim, "state"):
+            for state in self.optim.state.values():  # update optimize's state
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
         return self.to(device=device, dtype=dtype)
 
     def optimize(self):
@@ -231,7 +233,7 @@ class voh(nn.Module):
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 anchor, positive, negative = next(tl)
                 self.train()
-                self.update_lr(self.optim)
+                self.update_lr()
                 self.optim.zero_grad(set_to_none=True)
                 loss = tripletloss(
                     self(anchor),
@@ -241,8 +243,8 @@ class voh(nn.Module):
                 )
                 loss.backward()
                 self.optim.step()
-                self.log(loss)
                 self.validate(tl, vl)
+                self.log(loss)
                 self.it += 1
 
     @torch.no_grad()
@@ -267,9 +269,8 @@ class voh(nn.Module):
         if loss < self.loss:
             self.save(snap=f"-{loss:.2f}-{self.it:06d}")
         self.loss = min(self.loss, loss)
-        dumper(val_loss=(f"{loss:.4f} ({self.loss:.4f} best so far)"))
 
-    def update_lr(self, optim, force=False):
+    def update_lr(self, force=False):
         if not force and not self.it_interval(self.conf.int_sched_lr):
             return
         self.lr = (
@@ -283,7 +284,7 @@ class voh(nn.Module):
             if self.conf.int_sched_lr
             else self.conf.lr
         )
-        for param_group in optim.param_groups:
+        for param_group in self.optim.param_groups:
             param_group["lr"] = self.lr
 
     def dl(self):
@@ -320,7 +321,15 @@ class voh(nn.Module):
         if not self.it_interval(self.conf.size_val):
             return
         self._loss /= self.conf.size_val
-        dumper(lr=f"{self.lr:.6f}", avg_loss=f"{self._loss:.4f}")
+        record = [
+            f"{self.it:06d}",
+            f"{self.lr:.6f}",
+            f"{self._loss:.4f} ({None})",
+            f"{self.loss:.4f} ({None})",
+        ]
+        header = ["Step", "lr", "Avg Loss (EMA)", "Loss (EMA)"]
+        # nohead = True if self.it_interval(10 * self.conf.size_val) else None
+        print(tabulate(header=header, fn=" " * 10 + _, missing="?")([record]))
         self._loss = 0
 
     def save(self, name=None, snap=None):
