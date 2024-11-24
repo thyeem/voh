@@ -157,25 +157,32 @@ class voh(nn.Module):
     def numel(self):
         return sum(p.numel() for p in self.parameters())
 
-    def show(self):
-        dumper(
-            model=self.name,
-            parameters=f"{self.numel:_}",
-            in_enc=self.conf.size_in_enc,
-            hidden_enc=self.conf.size_hidden_enc,
-            out_enc=self.conf.size_out_enc,
-            in_dec=self.conf.size_in_dec,
-            attention_dec=self.conf.size_attn_pool,
-            out_dec=f"{self.conf.size_out_dec}  (embedding size)",
-            kernels=str(self.conf.size_kernel_blocks),
-            blocks_B=len(self.conf.size_kernel_blocks),
-            repeats_R=self.conf.num_repeat_blocks,
-        )
-        if exists(path_model(self.name)):
-            dumper(
+    @property
+    def summary(self):
+        return (
+            dmap(
+                model=self.name,
+                parameters=f"{self.numel:_}",
+                in_enc=self.conf.size_in_enc,
+                hidden_enc=self.conf.size_hidden_enc,
+                out_enc=self.conf.size_out_enc,
+                in_dec=self.conf.size_in_dec,
+                attention_dec=self.conf.size_attn_pool,
+                out_dec=f"{self.conf.size_out_dec}  (embedding size)",
+                kernels=str(self.conf.size_kernel_blocks),
+                blocks_B=len(self.conf.size_kernel_blocks),
+                repeats_R=self.conf.num_repeat_blocks,
+            )
+            | dmap(
                 path=which_model(self.name),
                 size=size_model(self.name),
             )
+            if exists(path_model(self.name))
+            else dmap()
+        )
+
+    def show(self):
+        dumper(**self.summary)
 
     def info(self, kind=None):
         if not kind:

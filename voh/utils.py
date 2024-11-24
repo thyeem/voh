@@ -156,7 +156,7 @@ def cosim(model, x, y):
 # ----------------------
 @fx
 def dumper(**kwargs):
-    nprint(dmap(**kwargs), _cols=20, _sort=False)
+    print(neatly(dmap(**kwargs), _cols=20, _sort=False))
 
 
 def which_model(name, dir=default.modelpath):
@@ -186,120 +186,6 @@ def list_models(dir=default.modelpath):
         for f in ls(dir, f=True)
     ]
     print(tabulate(data, header=mapl(str.upper, ("name", "size", "modified"))))
-
-
-@fx
-def tabulate(rows, header=None, style="plain", missing="", nohead=False, fn=id):
-    """Create a formatted table from data.
-
-     header | titles of columns
-      style | {"plain", "markdown", "org", "grid"}
-    missing | placeholder for missing data (``None``)
-       fn   | a function that finalizes each row
-
-    >>> data = [['Sofia', 9], ['Maria', 7]]
-    >>> print(tabulate(data, header=['Name', 'Age'], style='grid'))
-    +-------+-----+
-    | Name  | Age |
-    +=======+=====+
-    | Sofia | 9   |
-    +-------+-----+
-    | Maria | 7   |
-    +-------+-----+
-    """
-
-    def cell(c, w, missing):
-        return f"{str(c) if c is not None else missing:<{w}}"
-
-    def row(r, ws, sep, missing):
-        return sep.join(cell(c, w, missing) for c, w in zip(r, ws))
-
-    def separator(l, s, m, r, ws):
-        return l + s.join(m * w for w in ws) + r
-
-    guard(
-        rows | map(length) | fx(set) | length == 1,
-        "error, either empty rows or not all rows have the same length.",
-    )
-    guard(
-        not header or (len(header) in [len(rows[0]), len(rows[0]) - 1]),
-        "error, the wrong length of header provided.",
-    )
-    sty = dmap(
-        grid=dict(
-            top=f_(separator, "+-", "-+-", "-", "-+"),
-            header=f_(separator, "+=", "=+=", "=", "=+"),
-            middle=f_(separator, "+-", "-+-", "-", "-+"),
-            left="| ",
-            right=" |",
-            sep=" | ",
-        ),
-        markdown=dict(
-            header=f_(separator, "|-", "-|-", "-", "-|"),
-            left="| ",
-            right=" |",
-            sep=" | ",
-        ),
-        org=dict(
-            header=f_(separator, "|-", "-+-", "-", "-|"),
-            left="| ",
-            right=" |",
-            sep=" | ",
-        ),
-        plain=dict(
-            header=lambda x: "-" * (sum(x) + 4 * (len(x) - 1)),
-            left="",
-            right="",
-            sep="    ",
-        ),
-    ).get(style) or error(
-        f"Error, unsupported border style: '{style}'.\n"
-        "Options are 'grid', 'markdown', 'org', and 'plain'."
-    )
-    rows = [header] + rows if header else rows
-    ws = [  # [maximum-of-each-coloum-width]
-        max(len(str(c) if c is not None else missing) for c in col)
-        for col in zip(*rows)
-    ]
-    fmt_rows = [row(r, ws, sty.sep, missing) for r in rows]
-    o = []
-    if sty.top:
-        o.append(sty.top(ws))
-    if header and not nohead:
-        o.append(sty.left + fst(fmt_rows) + sty.right)
-        if sty.header:
-            o.append(sty.header(ws))
-    for r in fmt_rows[1:] if header else fmt_rows:
-        o.append(sty.left + r + sty.right)
-        if sty.middle:
-            o.append(sty.middle(ws))
-    return "\n".join(map(fn, o))
-
-
-def deepdict(obj, seen=None):
-    """Creates a deep ``dict`` from a given object.
-    This recursively converts nested objects into standard ``dict``,
-    handling circular references for mutable objects only.
-    """
-    if seen is None:
-        seen = set()
-    if obj is None:
-        return None
-
-    if isinstance(obj, (dict, list)) or hasattr(obj, "__dict__"):
-        obj_id = bi.id(obj)
-        if obj_id in seen:
-            return "<circular-ref>"
-        seen.add(obj_id)
-
-    if isinstance(obj, dict):
-        return {deepdict(k, seen): deepdict(v, seen) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [deepdict(element, seen) for element in obj]
-    elif hasattr(obj, "__dict__"):
-        return deepdict(obj.__dict__, seen)
-    else:
-        return obj
 
 
 def def_conf(kind=None):
