@@ -118,18 +118,6 @@ def safe_div(a, b):
 
 
 @fx
-def ema(prev, new, alpha=0.1):
-    return alpha * new + (1 - alpha) * prev
-
-
-def ema_test(alpha, size):
-    raw = [round(rand(0.5, 0.8), 3) for _ in range(size)]
-    print(raw)
-    print([round(x, 3) for x in scanl1(ema(alpha=alpha), raw)])
-    print(round(foldl1(ema(alpha=alpha), raw), 3))
-
-
-@fx
 def tt(x, model, threshold=0.7, expected=None, sound=False):
     errlog = tmpfile(suffix=".err") if expected is not None else None
     if errlog:
@@ -269,14 +257,15 @@ def eval_error_rate(
 
     def loader():
         while True:
-            a, b = randpair(db=db, mono=mono, sync=sync)
+            a, b = randpair(db, mono=mono, sync=sync)
             yield a, aug(b)
 
     if out:
         out = writer(f"{out}.{'frr' if mono else 'far'}")
     i, error = 1, 0
     for a, b in loader():
-        res = model.verify(a, b, v=True, threshold=threshold)
+        cosim = model.cosim(a, b)
+        res = True if cosim > threshold else False
         onError = res if not mono else not res
         if onError:
             error += 1
@@ -407,7 +396,7 @@ def pairs_pos(size, db, sync=False, key=None, augmentor=None, p=None):
         bimap(
             id,
             aug,
-            randpair(db=db, mono=1, sync=sync, key=key),
+            randpair(db, mono=1, sync=sync, key=key),
         )
         for _ in range(size)
     ]
@@ -419,7 +408,7 @@ def pairs_neg(size, db, key=None, augmentor=None, p=None):
         bimap(
             id,
             aug,
-            randpair(db=db, mono=0, key=key),
+            randpair(db, mono=0, key=key),
         )
         for _ in range(size)
     ]

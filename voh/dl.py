@@ -14,19 +14,20 @@ class _dataset:
     - Generates batches of anchor-positive-negative triplets
     """
 
-    def __init__(self, path, n_mels=80, sr=16000, size_batch=1):
+    def __init__(self, path, n_mels=80, sr=16000, hardset=False, size_batch=1):
         super().__init__()
         self.n_mels = n_mels
         self.sr = sr
         self.db = read_json(path)
-        self.preprocessor = filterbank(n_mels=n_mels, sr=sr)
+        self.fb = filterbank(n_mels=n_mels, sr=sr)  # preprocessor
         self.size_batch = size_batch
+        self.hardset = hardset
 
     def __iter__(self):
         while True:
             anchors, positives, negatives = zip(
                 *(
-                    map(self.preprocessor, triplet(self.db))
+                    map(self.fb, triplet(self.db, hardset=self.hardset))
                     for _ in range(self.size_batch)
                 )
             )

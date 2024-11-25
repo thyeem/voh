@@ -178,9 +178,13 @@ def list():
 @click.help_option("-h", "--help")
 def rm(models):
     """Remove a model"""
+    from foc import error
     from ouch import shell
 
     from voh import which_model
+
+    if not models:
+        error("Error, model name not provided.")
 
     for model in models:
         path = which_model(model)

@@ -29,14 +29,15 @@ class voh(nn.Module):
             .set_model()
             .set_iter()
             .set_optim()
-            .set_loss()
+            .set_stat()
             .finalize()
         )
 
     @classmethod
-    def load(cls, name, conf=None, strict=True):
+    def load(cls, name, conf=None, strict=True, debug=False):
         """Load the pre-trained"""
-        t = torch.load(which_model(name), map_location="cpu")
+        path = name if debug else which_model(name)
+        t = torch.load(path, map_location="cpu")
         return (
             voh()
             .set_name(t.get("name"))
@@ -46,7 +47,7 @@ class voh(nn.Module):
             .set_model(t["model"], strict=strict)
             .set_iter(t.get("it"))
             .set_optim(t.get("optim"))
-            .set_loss(t.get("loss"))
+            .set_stat(t.get("stat"))
             .finalize()
         )
 
@@ -80,11 +81,19 @@ class voh(nn.Module):
         return self
 
     def set_iter(self, it=None):
-        self.it = it or 0
+        self.it = self.conf.it if self.conf.it is not None else (it or 0)
         return self
 
-    def set_loss(self, loss=None):
-        self.loss = float("inf") if loss is None else loss
+    def set_stat(self, stat=None):
+        self.stat = dmap(
+            stat
+            or dmap(
+                loss=float("inf"),
+                vloss=float("inf"),
+                minloss=float("inf"),
+                alpha=0.2,
+            )
+        )
         return self
 
     def set_optim(self, optim=None):
@@ -113,7 +122,7 @@ class voh(nn.Module):
         ).get(o) or error(f"No such optim supported: {o}")
         if optim:
             self.optim.load_state_dict(optim)
-        self.update_lr(force=True)
+        self.update_lr()
         return self
 
     def into(self, device=None, dtype=None):
@@ -159,21 +168,20 @@ class voh(nn.Module):
 
     @property
     def summary(self):
-        return (
+        return dmap(
+            model=self.name,
+            parameters=f"{self.numel:_}",
+            in_enc=self.conf.size_in_enc,
+            hidden_enc=self.conf.size_hidden_enc,
+            out_enc=self.conf.size_out_enc,
+            in_dec=self.conf.size_in_dec,
+            attention_dec=self.conf.size_attn_pool,
+            out_dec=f"{self.conf.size_out_dec}  (embedding size)",
+            kernels=str(self.conf.size_kernel_blocks),
+            blocks_B=len(self.conf.size_kernel_blocks),
+            repeats_R=self.conf.num_repeat_blocks,
+        ) | (
             dmap(
-                model=self.name,
-                parameters=f"{self.numel:_}",
-                in_enc=self.conf.size_in_enc,
-                hidden_enc=self.conf.size_hidden_enc,
-                out_enc=self.conf.size_out_enc,
-                in_dec=self.conf.size_in_dec,
-                attention_dec=self.conf.size_attn_pool,
-                out_dec=f"{self.conf.size_out_dec}  (embedding size)",
-                kernels=str(self.conf.size_kernel_blocks),
-                blocks_B=len(self.conf.size_kernel_blocks),
-                repeats_R=self.conf.num_repeat_blocks,
-            )
-            | dmap(
                 path=which_model(self.name),
                 size=size_model(self.name),
             )
@@ -190,15 +198,16 @@ class voh(nn.Module):
                 encoder=self.encoder,
                 decoder=self.decoder,
             )
-        dumper(
-            **kind_conf(self.conf, kind=kind),
-            loss=self.loss,
+        o = dmap(**kind_conf(self.conf, kind=kind)) | dmap(
+            loss=self.stat.loss,
+            val_loss=self.stat.vloss,
             it=(
                 f"{self.it}  "
                 f"({100 * self.it / (self.conf.epochs * self.conf.steps):.2f}"
                 "% complete)"
             ),
         )
+        dumper(**o)
 
     def __repr__(self):
         return ""
@@ -235,12 +244,14 @@ class voh(nn.Module):
     def get_trained(self):
         tl, vl = self.dl()  # dataloader: (training, validation)
         g = self.conf.steps * self.conf.epochs  # global steps
+        self._lsum = 0
         with tl, vl:
             vl.pause()
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 anchor, positive, negative = next(tl)
                 self.train()
-                self.update_lr()
+                if self.it_interval(self.conf.int_sched_lr):
+                    self.update_lr()
                 self.optim.zero_grad(set_to_none=True)
                 loss = tripletloss(
                     self(anchor),
@@ -250,14 +261,15 @@ class voh(nn.Module):
                 )
                 loss.backward()
                 self.optim.step()
-                self.validate(tl, vl)
-                self.log(loss)
+                self._lsum += loss
+                if self.it_interval(self.conf.int_val):
+                    self.validate(tl, vl)
+                if self.it_interval(self.conf.size_val):
+                    self.log()
                 self.it += 1
 
     @torch.no_grad()
     def validate(self, tl, vl):
-        if not self.it_interval(self.conf.int_val):
-            return
         self.eval()
         tl.pause()
         vl.resume()
@@ -269,17 +281,21 @@ class voh(nn.Module):
                 self(positive),
                 self(negative),
                 margin=self.conf.margin_loss,
-            )
+            ).item()
         vl.pause()
         tl.resume()
         loss /= self.conf.size_val
-        if loss < self.loss:
-            self.save(snap=f"-{loss:.2f}-{self.it:06d}")
-        self.loss = min(self.loss, loss)
+        self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, loss)
+        if loss < self.stat.minloss:
+            self.save(
+                snap=f"-v{self.stat.vloss:.2f}"
+                f"-t{self.stat.loss:.2f}"
+                f"-{self.it:06d}"
+            )
+        self.stat.minloss = min(self.stat.minloss, loss)
+        self.retain_ckpts()
 
-    def update_lr(self, force=False):
-        if not force and not self.it_interval(self.conf.int_sched_lr):
-            return
+    def update_lr(self):
         self.lr = (
             sched_lr(
                 self.it,
@@ -319,25 +335,29 @@ class voh(nn.Module):
             num_workers=self.conf.num_workers,
         )
         return (
-            _dataloader(_dataset(self.conf.ds_train, **kwds), **kwdl),
-            _dataloader(_dataset(self.conf.ds_val, **kwds), **kwdl),
+            _dataloader(
+                _dataset(self.conf.ds_train, hardset=self.conf.hardset, **kwds),
+                **kwdl,
+            ),
+            _dataloader(
+                _dataset(self.conf.ds_val, **kwds),
+                **kwdl,
+            ),
         )
 
-    def log(self, loss):
-        setattr(self, "_loss", getattr(self, "_loss", 0) + loss)
-        if not self.it_interval(self.conf.size_val):
-            return
-        self._loss /= self.conf.size_val
+    def log(self):
+        loss = (self._lsum / self.conf.size_val).item()
+        self.stat.loss = ema(alpha=self.stat.alpha)(self.stat.loss, loss)
         record = [
             f"{self.it:06d}",
             f"{self.lr:.6f}",
-            f"{self._loss:.4f} ({None})",
-            f"{self.loss:.4f} ({None})",
+            f"{loss:.4f}",
+            f"{self.stat.loss:.4f}",
+            f"{self.stat.vloss:.4f}({self.stat.minloss:.4f})",
         ]
-        header = ["Step", "lr", "Avg Loss (EMA)", "Loss (EMA)"]
-        # nohead = True if self.it_interval(10 * self.conf.size_val) else None
-        print(tabulate(header=header, fn=" " * 10 + _, missing="?")([record]))
-        self._loss = 0
+        header = ["Step", "lr", "Loss", "Loss(EMA)", "vLoss(minLoss)"]
+        print(tabulate([record], header=header, fn=" " * 10 + _))
+        self._lsum = 0
 
     def save(self, name=None, snap=None):
         """Create a checkpoint"""
@@ -350,7 +370,7 @@ class voh(nn.Module):
             dict(
                 name=name,
                 it=self.it,
-                loss=self.loss,
+                stat=dict(self.stat),
                 optim=self.optim.state_dict() if self.optim else None,
                 conf=dict(self.conf),
                 model=self.state_dict(),
@@ -362,6 +382,11 @@ class voh(nn.Module):
             mkdir(d)
             shell(f"cp -f {path} {d}/{basename(path)}{snap}")
         return path
+
+    def retain_ckpts(self, n=12):
+        path = f"{path_model(self.name)}.snap"
+        for f in shell(f"find {path} -type f | sort -V")[n:]:
+            os.remove(f)
 
     def it_interval(self, val):
         return self.it and self.it % val == 0

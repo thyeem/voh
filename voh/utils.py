@@ -1,4 +1,3 @@
-import builtins as bi
 import hashlib
 import json
 import math
@@ -45,6 +44,13 @@ def wtd_mad(x, weights):
 
 def hmean(x):  # harmonic mean
     return np.mean([1 / e if e != 0 else np.inf for e in x]) ** (-1)
+
+
+@fx
+def ema(prev, new, alpha=0.1):
+    if prev in (float("inf"), float("-inf")):
+        return new
+    return alpha * new + (1 - alpha) * prev
 
 
 @fx
@@ -472,11 +478,34 @@ def to_pairs(x):
         return [x] if isinstance(x, tuple) else list(x)
 
 
-def triplet(db):
+def triplet(db, hardset=False):
     """Get a triplet for Triplet Loss approach"""
-    anchor, positive = randpair(db, mono=True, sync=False, size=1)
-    _, negative = randpair(db, mono=False, key=speaker_id(anchor))
+    if hardset:
+        anchor, positive, negative = db[randint(len(db))]
+    else:
+        anchor, positive = randpair(db, mono=True, sync=False, size=1)
+        _, negative = randpair(db, mono=False, key=speaker_id(anchor))
     return anchor, positive, negative
+
+
+def mining_hardset(md, db, out="hardset.db", threshold=0.6, size=None):
+    """Mine the most challenging examples for models to distinguish"""
+    size = size or len(flatl(db.values())) // 10
+    o = set()
+    gathered = set()
+    while True:
+        a, b = randpair(db, mono=False)
+        if _pair_id(a, b) in gathered:
+            continue
+        gathered.add(_pair_id(a, b))
+        cosim = md.cosim(a, b)
+        if cosim > threshold:
+            o.add((a, randwav(db, key=speaker_id(a)), b))
+            o.add((b, randwav(db, key=speaker_id(b)), a))
+            print(f"{len(o):06d}  {speaker_id(a)}  {speaker_id(b)}  {cosim:.4f}")
+        if len(o) >= size:
+            break
+    write_json(out, list(o))
 
 
 def get_pre_trained():
