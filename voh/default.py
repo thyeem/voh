@@ -8,15 +8,15 @@ conf = dmap(
     # model configuration
     # -----------------------
     size_in_enc=(CORE, 80),
-    size_hidden_enc=(CORE, 256),
-    size_out_enc=(CORE, 512),
+    size_hidden_enc=(CORE, 512),
+    size_out_enc=(CORE, 1024),
     size_kernel_prolog=(CORE, 3),
     size_kernel_epilog=(CORE, 1),
-    size_kernel_blocks=(CORE, (5, 7, 9, 11)),
+    size_kernel_blocks=(CORE, (5, 9, 13, 17)),
     num_repeat_blocks=(CORE, 2),
     ratio_reduction=(CORE, 8),
-    size_in_dec=(CORE, 512),
-    size_attn_pool=(CORE, 32),
+    size_in_dec=(CORE, 1024),
+    size_attn_pool=(CORE, 128),
     size_out_dec=(CORE, 128),
     dropout=(CORE, 0.1),
     # -----------------------
