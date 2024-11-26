@@ -62,6 +62,7 @@ def filterbank(
     n_mels=80,
     fmin=0,
     fmax=None,
+    from_ysr=False,
 ):
     """Generate log of Mel-filterbank energies from a given wavfile.
     -----------------------------
@@ -77,7 +78,7 @@ def filterbank(
     num_frames = 1 + [SAMPLES(t*sr) - WINDOW_SIZE(n_fft)] / hop_length
      1-sec wav = 1 + [1*16000 - 512] / 160 = 98 (frames/sec)
     """
-    y, orig_sr = readwav(f)
+    y, orig_sr = f if from_ysr else readwav(f)
     if sr != orig_sr:
         y = librosa.resample(y, orig_sr=orig_sr, target_sr=sr)
     y = librosa.feature.melspectrogram(
@@ -97,10 +98,10 @@ def filterbank(
     )(y)
 
 
-def tripletloss(anchor, positive, negative, margin=0.5):
-    return torch.relu(
-        (anchor - positive).pow(2).sum(dim=1)
-        - (anchor - negative).pow(2).sum(dim=1)
+def tripletloss(anchor, positive, negative, margin=1.0):
+    return F.relu(
+        F.pairwise_distance(anchor, positive)
+        - F.pairwise_distance(anchor, negative)
         + margin
     ).mean()
 
@@ -404,7 +405,7 @@ def randwav(db, key=None, size=1):
 
 @fx
 def augwav(f, augmentor=None, out=None, wav=True):
-    augmentor = augmentor or demo_augmentor(v=True)
+    augmentor = augmentor or demo_aug(v=True)
     return cf_(
         (
             savewav(out or tmpfile(suffix=".wav", dir=f"/tmp/{speaker_id(f)}"))
@@ -506,6 +507,15 @@ def mining_hardset(md, db, out="hardset.db", threshold=0.6, size=None):
         if len(o) >= size:
             break
     write_json(out, list(o))
+
+
+def tasting(md, db, mono=False, size=10):
+    v = []
+    for o in randpair(db, mono=mono, size=size):
+        cosim = md.cosim(*o)
+        print(f"{cosim:.4f}")
+        v.append(cosim)
+    print(f"mean: {np.mean(v):.4f}")
 
 
 def get_pre_trained():
@@ -771,35 +781,27 @@ def demo_aug(p=1, v=False):
     return cf_(*map(probify(p=p), force(g)))
 
 
-def voh_aug(v=False, p_finish=0.7, p_main=0.3):
-    finish = lazy(
-        choice,
-        [  # finisher: gain power or inject noise/sfx
-            gain(db=(-3, 3), v=v),
-            gaussian_noise(snr=(5, 10), v=v),
-            sfx_noise(snr=(5, 10), v=v),
-        ],
-    )
-    main = lazy(
-        choice,
-        [
-            equalize(low=(0.5, 1.5), mid=(0.5, 1.5), high=(0.5, 1.5), v=v),
-            time_stretch(rate=(0.8, 1.2), v=v),
-            pitch_shift(semitone=(-2.0, 2.0), v=v),
-            bandpass(low=(100, 400), high=(1500, 4000), v=v),
-            reverb(delay=(0.1), decay=(0.3), v=v),
-            room_simulator(decay=(10, 20), v=v),
-        ],
-    )
-    return cf_(
-        probify(p=p_finish)(force(finish)),
-        probify(p=p_main)(force(main)),
-    )
+def perturb(p=0.3, num_aug=3, v=False):
+    augmetors = [
+        gain(db=(-3, 3), v=v),
+        gaussian_noise(snr=(5, 10), v=v),
+        sfx_noise(snr=(5, 10), v=v),
+        equalize(low=(0.5, 1.5), mid=(0.5, 1.5), high=(0.5, 1.5), v=v),
+        time_stretch(rate=(0.8, 1.2), v=v),
+        pitch_shift(semitone=(-2.0, 2.0), v=v),
+        bandpass(low=(100, 400), high=(1500, 4000), v=v),
+        reverb(delay=(0.1), decay=(0.3), v=v),
+        room_simulator(decay=(10, 20), v=v),
+    ]
+    return probify(p=p)(cf_(*choice(augmetors, size=num_aug)))
 
 
-@lru_cache
 def randsfx():
-    return readwav(choice(ls("sfx")))
+    @lru_cache
+    def sfx():
+        return ls("sfx")
+
+    return readwav(choice(sfx()))
 
 
 def add_to_sfx(src, out="sfx", ss=None, to=None):

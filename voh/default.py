@@ -27,6 +27,7 @@ conf = dmap(
     ds_train=(META, None),
     ds_val=(META, None),
     hardset=(META, False),
+    reset=(META, False),
     seed=(META, None),
     margin_loss=(META, 0.7),
     weight_decay=(META, 1e-4),
@@ -38,12 +39,13 @@ conf = dmap(
     lr_min=(META, 1e-6),
     epochs=(META, 1),
     steps=(META, 10000),
-    it=(META, None),
     int_sched_lr=(META, 20),  # interval of updating lr, None for no decay
     size_batch=(META, 8),
     size_val=(META, 20),  # also interval of logging
     int_val=(META, 100),  # interval of validation
     num_workers=(META, 2),
+    num_aug=(META, 3),
+    prob_aug=(META, 0.3),
 )
 
 modelpath = f"{dirname(__file__)}/../o"

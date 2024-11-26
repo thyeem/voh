@@ -81,19 +81,19 @@ class voh(nn.Module):
         return self
 
     def set_iter(self, it=None):
-        self.it = self.conf.it if self.conf.it is not None else (it or 0)
+        self.it = 0 if self.conf.reset else (it or 0)
         return self
 
     def set_stat(self, stat=None):
-        self.stat = dmap(
-            stat
-            or dmap(
+        if self.conf.reset or stat is None:
+            self.stat = dmap(
                 loss=float("inf"),
                 vloss=float("inf"),
                 minloss=float("inf"),
                 alpha=0.2,
             )
-        )
+        else:
+            self.stat = dmap(stat)
         return self
 
     def set_optim(self, optim=None):
@@ -120,7 +120,7 @@ class voh(nn.Module):
                 betas=self.conf.betas,
             ),
         ).get(o) or error(f"No such optim supported: {o}")
-        if optim:
+        if not self.conf.reset and optim:
             self.optim.load_state_dict(optim)
         self.update_lr()
         return self
@@ -199,8 +199,8 @@ class voh(nn.Module):
                 decoder=self.decoder,
             )
         o = dmap(**kind_conf(self.conf, kind=kind)) | dmap(
-            loss=self.stat.loss,
-            val_loss=self.stat.vloss,
+            loss=f"{self.stat.loss:.4f}",
+            val_loss=f"{self.stat.vloss:.4f}",
             it=(
                 f"{self.it}  "
                 f"({100 * self.it / (self.conf.epochs * self.conf.steps):.2f}"
@@ -286,13 +286,13 @@ class voh(nn.Module):
         tl.resume()
         loss /= self.conf.size_val
         self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, loss)
-        if loss < self.stat.minloss:
+        if self.stat.vloss < self.stat.minloss:
+            self.stat.minloss = self.stat.vloss
             self.save(
                 snap=f"-v{self.stat.vloss:.2f}"
                 f"-t{self.stat.loss:.2f}"
                 f"-{self.it:06d}"
             )
-        self.stat.minloss = min(self.stat.minloss, loss)
         self.retain_ckpts()
 
     def update_lr(self):
@@ -325,23 +325,25 @@ class voh(nn.Module):
             self.conf.ds_val and exists(self.conf.ds_val),
             f"No such validation set 'ds_val', {self.conf.ds_val}",
         )
-        kwds = dict(  # shared keywords for dataset
+        shared = dict(  # shared keywords for dataset
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
             size_batch=self.conf.size_batch,
         )
-        kwdl = dict(  # shared keywords for dataloader
-            size_queue=self.conf.size_batch,
-            num_workers=self.conf.num_workers,
-        )
         return (
-            _dataloader(
-                _dataset(self.conf.ds_train, hardset=self.conf.hardset, **kwds),
-                **kwdl,
+            _dataloader(  # training data loader
+                _dataset(
+                    self.conf.ds_train,
+                    hardset=self.conf.hardset,
+                    p=self.conf.prob_aug,
+                    num_aug=self.conf.num_aug,
+                    **shared,
+                ),
+                num_workers=self.conf.num_workers,
             ),
-            _dataloader(
-                _dataset(self.conf.ds_val, **kwds),
-                **kwdl,
+            _dataloader(  # validation data loader
+                _dataset(self.conf.ds_val, p=None, **shared),
+                num_workers=self.conf.num_workers,
             ),
         )
 

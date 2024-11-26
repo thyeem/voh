@@ -90,31 +90,42 @@ def cli():
     "-f",
     "--file",
     type=str,
-    metavar="string",
     help="Name of the configuration file for a model",
 )
-def create(model, file):
+@click.option(
+    "-c",
+    "--clone",
+    type=str,
+    help="Create a model by cloning an existing one",
+)
+def create(model, file, clone):
     """Create a model from a conf file"""
     from foc import cf_, lazy
     from ouch import prompt, read_conf
 
-    from voh import dumper, size_model, voh
+    from voh import dumper, size_model, voh, which_model
 
-    o = voh.create(model, file and read_conf(file))
-    o.show()
-    prompt(
-        "\nAre you sure to save this model?",
-        ok=lazy(
-            cf_(
-                lambda x: dumper(
-                    model=o.name,
-                    path=x,
-                    size=size_model(o.name),
-                ),
-                o.save,
-            )
-        ),
-    )
+    if clone:
+        path = which_model(clone)
+        o = voh.load(clone)
+        o.save(model)
+        print(f"created '{model}'")
+    else:
+        o = voh.create(model, file and read_conf(file))
+        o.show()
+        prompt(
+            "\nAre you sure to save this model?",
+            ok=lazy(
+                cf_(
+                    lambda x: dumper(
+                        model=o.name,
+                        path=x,
+                        size=size_model(o.name),
+                    ),
+                    o.save,
+                )
+            ),
+        )
 
 
 @cli.command(cls=_command)
@@ -124,7 +135,6 @@ def create(model, file):
     "-f",
     "--file",
     type=str,
-    metavar="string",
     help="Name of the configuration file for training",
 )
 def train(model, file):

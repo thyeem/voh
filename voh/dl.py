@@ -14,20 +14,36 @@ class _dataset:
     - Generates batches of anchor-positive-negative triplets
     """
 
-    def __init__(self, path, n_mels=80, sr=16000, hardset=False, size_batch=1):
+    def __init__(
+        self,
+        path,
+        n_mels=80,
+        sr=16000,
+        hardset=False,
+        size_batch=1,
+        p=None,
+        num_aug=1,
+    ):
         super().__init__()
         self.n_mels = n_mels
         self.sr = sr
         self.db = read_json(path)
-        self.fb = filterbank(n_mels=n_mels, sr=sr)  # preprocessor
         self.size_batch = size_batch
         self.hardset = hardset
+        self.processor = cf_(  # log Mel-filterbanks
+            filterbank(n_mels=n_mels, sr=sr, from_ysr=bool(p)),
+            (  # data augmentor
+                id  # never augment data when validation set
+                if not p
+                else augwav(augmentor=perturb(p=p, num_aug=num_aug), wav=False)
+            ),
+        )
 
     def __iter__(self):
         while True:
             anchors, positives, negatives = zip(
                 *(
-                    map(self.fb, triplet(self.db, hardset=self.hardset))
+                    map(self.processor, triplet(self.db, hardset=self.hardset))
                     for _ in range(self.size_batch)
                 )
             )
@@ -60,7 +76,7 @@ class _dataloader:
     - 'pause' and 'resume' to enhance efficiency in each phase
     """
 
-    def __init__(self, dataset, num_workers=1, size_queue=10):
+    def __init__(self, dataset, num_workers=1, size_queue=32):
         self.dataset = dataset
         self.num_workers = num_workers
         self.size_queue = size_queue
