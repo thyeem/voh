@@ -121,6 +121,7 @@ class _dataloader:
                 except StopIteration:
                     break
                 except Full:
+                    time.sleep(0.1)
                     continue
 
         for _ in range(self.num_workers):

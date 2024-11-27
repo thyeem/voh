@@ -145,31 +145,31 @@ class voh(nn.Module):
         torch._dynamo.eval_frame.OptimizedModule.__repr__ = lambda x: ""
         return self.into().optimize()
 
-    def guards(self):
+    def guards(self, train=False):
         guard(
             self.conf.size_out_enc == self.conf.size_in_dec,
-            f"The output size({self.conf.size_out_enc}) of"
+            f"error, output size({self.conf.size_out_enc}) of"
             " the encoder does not match the input size"
             f"({self.conf.size_in_dec}) of the decoder.",
         )
         guard(
+            self.conf.k_negatives <= self.conf.size_batch,
+            f"error, number of hard negatives ({self.conf.k_negatives}) "
+            f"must be less than batch size ({self.conf.conf.size_batch})",
+        )
+        train and guard(
             self.conf.size_in_enc == self.conf.num_mel_filters,
-            f"The input size({self.conf.size_in_enc}) of"
+            f"error, input size({self.conf.size_in_enc}) of"
             " the encoder does not match the number of "
             f"Mel-filterbanks({self.conf.num_mel_filters}).",
         )
-        guard(
+        train and guard(
             self.conf.ds_train and exists(self.conf.ds_train),
-            f"No such training set 'ds_train', {self.conf.ds_train}",
+            f"error, not found value/set for 'ds_train': {self.conf.ds_train}",
         )
-        guard(
+        train and guard(
             self.conf.ds_val and exists(self.conf.ds_val),
-            f"No such validation set 'ds_val', {self.conf.ds_val}",
-        )
-        guard(
-            self.conf.k_negatives <= self.conf.size_batch,
-            f"Number of hard negatives ({self.conf.k_negatives}) "
-            f"must be less than batch size ({self.conf.conf.size_batch})",
+            f"error, not found value/set for 'ds_val': {self.conf.ds_val}",
         )
 
     # -----------
@@ -272,7 +272,7 @@ class voh(nn.Module):
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 anchor, positive, negative = next(tl)
                 self.train()
-                if self.int_run(self.conf.int_sched_lr):
+                if self.on_interval(self.conf.int_sched_lr):
                     self.update_lr()
                 self.optim.zero_grad(set_to_none=True)
 
@@ -307,9 +307,9 @@ class voh(nn.Module):
                 loss.backward()
                 self.optim.step()
                 self._loss += loss
-                if self.int_run(self.conf.int_val):
+                if self.on_interval(self.conf.int_val):
                     self.validate(tl, vl)
-                if self.int_run(self.conf.size_val):
+                if self.on_interval(self.conf.size_val):
                     self.log()
                 self.it += 1
 
@@ -351,6 +351,7 @@ class voh(nn.Module):
             param_group["lr"] = self._lr
 
     def dl(self):
+        self.guards(train=True)
         shared = dict(  # shared keywords for dataset
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
@@ -365,12 +366,12 @@ class voh(nn.Module):
                     **shared,
                 ),
                 num_workers=self.conf.num_workers,
-                size_queue=self.conf.size_batch * 2,
+                size_queue=self.conf.size_batch,
             ),
             _dataloader(  # validation data loader
                 _dataset(self.conf.ds_val, p=None, **shared),
                 num_workers=self.conf.num_workers,
-                size_queue=self.conf.size_batch * 2,
+                size_queue=self.conf.size_batch,
             ),
         )
 
@@ -388,7 +389,7 @@ class voh(nn.Module):
         header = ["Step", "lr", "Loss", "Loss(EMA)", "vLoss", "vLoss(EMA)"]
         print(tabulate([record], header=header, fn=" " * 10 + _))
         self._loss = 0
-        if self.int_run(self.conf.steps // 20):
+        if self.on_interval(self.conf.steps // 20):
             self.checkpoint()
 
     def save(self, name=None, snap=None):
@@ -422,5 +423,5 @@ class voh(nn.Module):
         for f in shell(f"find {path} -type f | sort -V")[retain:]:
             os.remove(f)
 
-    def int_run(self, val):
+    def on_interval(self, val):
         return self.it and self.it % val == 0
