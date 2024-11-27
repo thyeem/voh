@@ -19,7 +19,6 @@ class _dataset:
         path,
         n_mels=80,
         sr=16000,
-        hardset=False,
         size_batch=1,
         p=None,
         num_aug=1,
@@ -29,7 +28,6 @@ class _dataset:
         self.sr = sr
         self.db = read_json(path)
         self.size_batch = size_batch
-        self.hardset = hardset
         self.processor = cf_(  # log Mel-filterbanks
             filterbank(n_mels=n_mels, sr=sr, from_ysr=bool(p)),
             (  # data augmentor
@@ -43,7 +41,10 @@ class _dataset:
         while True:
             anchors, positives, negatives = zip(
                 *(
-                    map(self.processor, triplet(self.db, hardset=self.hardset))
+                    map(
+                        self.processor,
+                        triplet(self.db),
+                    )
                     for _ in range(self.size_batch)
                 )
             )

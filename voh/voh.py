@@ -58,6 +58,7 @@ class voh(nn.Module):
     def set_conf(self, conf, kind=None, warn=True):
         ref = self.conf if hasattr(self, "conf") else def_conf()
         self.conf = ref | uniq_conf(conf, def_conf(kind=kind), warn=warn)
+        self.guards()
         return self
 
     def set_seed(self, seed=None):
@@ -68,12 +69,6 @@ class voh(nn.Module):
         return self
 
     def set_model(self, model=None, strict=True):
-        guard(
-            self.conf.size_out_enc == self.conf.size_in_dec,
-            f"The output size({self.conf.size_out_enc}) of"
-            " the encoder does not match the input size"
-            f"({self.conf.size_in_dec}) of the decoder.",
-        )
         self.encoder = Encoder(self.conf)
         self.decoder = Decoder(self.conf)
         if model:
@@ -122,7 +117,6 @@ class voh(nn.Module):
         ).get(o) or error(f"No such optim supported: {o}")
         if not self.conf.reset and optim:
             self.optim.load_state_dict(optim)
-        self.update_lr()
         return self
 
     def into(self, device=None, dtype=None):
@@ -150,6 +144,33 @@ class voh(nn.Module):
         torch._logging.set_logs(dynamo=logging.ERROR)
         torch._dynamo.eval_frame.OptimizedModule.__repr__ = lambda x: ""
         return self.into().optimize()
+
+    def guards(self):
+        guard(
+            self.conf.size_out_enc == self.conf.size_in_dec,
+            f"The output size({self.conf.size_out_enc}) of"
+            " the encoder does not match the input size"
+            f"({self.conf.size_in_dec}) of the decoder.",
+        )
+        guard(
+            self.conf.size_in_enc == self.conf.num_mel_filters,
+            f"The input size({self.conf.size_in_enc}) of"
+            " the encoder does not match the number of "
+            f"Mel-filterbanks({self.conf.num_mel_filters}).",
+        )
+        guard(
+            self.conf.ds_train and exists(self.conf.ds_train),
+            f"No such training set 'ds_train', {self.conf.ds_train}",
+        )
+        guard(
+            self.conf.ds_val and exists(self.conf.ds_val),
+            f"No such validation set 'ds_val', {self.conf.ds_val}",
+        )
+        guard(
+            self.conf.k_negatives <= self.conf.size_batch,
+            f"Number of hard negatives ({self.conf.k_negatives}) "
+            f"must be less than batch size ({self.conf.conf.size_batch})",
+        )
 
     # -----------
     # Model
@@ -244,27 +265,51 @@ class voh(nn.Module):
     def get_trained(self):
         tl, vl = self.dl()  # dataloader: (training, validation)
         g = self.conf.steps * self.conf.epochs  # global steps
-        self._lsum = 0
+        self._loss = self._vloss = 0
+        self.update_lr()
         with tl, vl:
             vl.pause()
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 anchor, positive, negative = next(tl)
                 self.train()
-                if self.it_interval(self.conf.int_sched_lr):
+                if self.int_run(self.conf.int_sched_lr):
                     self.update_lr()
                 self.optim.zero_grad(set_to_none=True)
-                loss = tripletloss(
-                    self(anchor),
-                    self(positive),
-                    self(negative),
-                    margin=self.conf.margin_loss,
-                )
+
+                # generate embeddings
+                anchor = self(anchor)
+                positive = self(positive)
+                negative = self(negative)
+
+                if rand() < self.conf.prob_mining:
+                    loss = tripletloss(  # online hard mining tripletloss
+                        anchor.unsqueeze(1),
+                        positive.unsqueeze(1),
+                        negative[
+                            hard_indices(
+                                anchor,
+                                positive,
+                                negative,
+                                margin=self.conf.margin_loss,
+                                k=self.conf.k_negatives,
+                            )
+                        ],
+                        margin=self.conf.margin_loss,
+                    )
+                else:
+                    loss = tripletloss(  # vanilla tripletloss
+                        anchor,
+                        positive,
+                        negative,
+                        margin=self.conf.margin_loss,
+                    )
+
                 loss.backward()
                 self.optim.step()
-                self._lsum += loss
-                if self.it_interval(self.conf.int_val):
+                self._loss += loss
+                if self.int_run(self.conf.int_val):
                     self.validate(tl, vl)
-                if self.it_interval(self.conf.size_val):
+                if self.int_run(self.conf.size_val):
                     self.log()
                 self.it += 1
 
@@ -273,10 +318,10 @@ class voh(nn.Module):
         self.eval()
         tl.pause()
         vl.resume()
-        loss = 0
+        self._vloss = 0
         for _ in tracker(range(self.conf.size_val), "validation"):
             anchor, positive, negative = next(vl)
-            loss += tripletloss(
+            self._vloss += tripletloss(
                 self(anchor),
                 self(positive),
                 self(negative),
@@ -284,19 +329,14 @@ class voh(nn.Module):
             ).item()
         vl.pause()
         tl.resume()
-        loss /= self.conf.size_val
-        self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, loss)
+        self._vloss /= self.conf.size_val
+        self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, self._vloss)
         if self.stat.vloss < self.stat.minloss:
             self.stat.minloss = self.stat.vloss
-            self.save(
-                snap=f"-v{self.stat.vloss:.2f}"
-                f"-t{self.stat.loss:.2f}"
-                f"-{self.it:06d}"
-            )
-        self.retain_ckpts()
+            self.checkpoint()
 
     def update_lr(self):
-        self.lr = (
+        self._lr = (
             sched_lr(
                 self.it,
                 lr=self.conf.lr,
@@ -308,23 +348,9 @@ class voh(nn.Module):
             else self.conf.lr
         )
         for param_group in self.optim.param_groups:
-            param_group["lr"] = self.lr
+            param_group["lr"] = self._lr
 
     def dl(self):
-        guard(
-            self.conf.size_in_enc == self.conf.num_mel_filters,
-            f"The input size({self.conf.size_in_enc}) of"
-            " the encoder does not match the number of "
-            f"Mel-filterbanks({self.conf.num_mel_filters}).",
-        )
-        guard(
-            self.conf.ds_train and exists(self.conf.ds_train),
-            f"No such training set 'ds_train', {self.conf.ds_train}",
-        )
-        guard(
-            self.conf.ds_val and exists(self.conf.ds_val),
-            f"No such validation set 'ds_val', {self.conf.ds_val}",
-        )
         shared = dict(  # shared keywords for dataset
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
@@ -334,35 +360,38 @@ class voh(nn.Module):
             _dataloader(  # training data loader
                 _dataset(
                     self.conf.ds_train,
-                    hardset=self.conf.hardset,
                     p=self.conf.prob_aug,
                     num_aug=self.conf.num_aug,
                     **shared,
                 ),
                 num_workers=self.conf.num_workers,
+                size_queue=self.conf.size_batch * 2,
             ),
             _dataloader(  # validation data loader
                 _dataset(self.conf.ds_val, p=None, **shared),
                 num_workers=self.conf.num_workers,
+                size_queue=self.conf.size_batch * 2,
             ),
         )
 
     def log(self):
-        loss = (self._lsum / self.conf.size_val).item()
+        loss = (self._loss / self.conf.size_val).item()
         self.stat.loss = ema(alpha=self.stat.alpha)(self.stat.loss, loss)
         record = [
             f"{self.it:06d}",
-            f"{self.lr:.6f}",
+            f"{self._lr:.6f}",
             f"{loss:.4f}",
             f"{self.stat.loss:.4f}",
-            f"{self.stat.vloss:.4f}({self.stat.minloss:.4f})",
+            f"{self._vloss:.4f}",
+            f"{self.stat.vloss:.4f} ({self.stat.minloss:.4f})",
         ]
-        header = ["Step", "lr", "Loss", "Loss(EMA)", "vLoss(minLoss)"]
+        header = ["Step", "lr", "Loss", "Loss(EMA)", "vLoss", "vLoss(EMA)"]
         print(tabulate([record], header=header, fn=" " * 10 + _))
-        self._lsum = 0
+        self._loss = 0
+        if self.int_run(self.conf.steps // 20):
+            self.checkpoint()
 
     def save(self, name=None, snap=None):
-        """Create a checkpoint"""
         name = name or self.name
         if null(name):
             error("The model name is not specified.")
@@ -374,7 +403,7 @@ class voh(nn.Module):
                 it=self.it,
                 stat=dict(self.stat),
                 optim=self.optim.state_dict() if self.optim else None,
-                conf=dict(self.conf),
+                conf=dict(self.conf) | dict(reset=False),
                 model=self.state_dict(),
             ),
             normpath(path),
@@ -385,10 +414,13 @@ class voh(nn.Module):
             shell(f"cp -f {path} {d}/{basename(path)}{snap}")
         return path
 
-    def retain_ckpts(self, n=12):
+    def checkpoint(self, retain=12):
+        self.save(
+            snap=f"-v{self.stat.vloss:.2f}-t{self.stat.loss:.2f}-{self.it:06d}",
+        )
         path = f"{path_model(self.name)}.snap"
-        for f in shell(f"find {path} -type f | sort -V")[n:]:
+        for f in shell(f"find {path} -type f | sort -V")[retain:]:
             os.remove(f)
 
-    def it_interval(self, val):
+    def int_run(self, val):
         return self.it and self.it % val == 0

@@ -26,7 +26,6 @@ conf = dmap(
     samplerate=(META, 16000),
     ds_train=(META, None),
     ds_val=(META, None),
-    hardset=(META, False),
     reset=(META, False),
     seed=(META, None),
     margin_loss=(META, 0.7),
@@ -46,6 +45,8 @@ conf = dmap(
     num_workers=(META, 2),
     num_aug=(META, 3),
     prob_aug=(META, 0.3),
+    k_negatives=(META, 2),  # number of hard negatives
+    prob_mining=(META, 0),  # probability of hard negative mining
 )
 
 modelpath = f"{dirname(__file__)}/../o"

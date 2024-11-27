@@ -63,6 +63,7 @@ def filterbank(
     fmin=0,
     fmax=None,
     from_ysr=False,
+    normalize=True,
 ):
     """Generate log of Mel-filterbank energies from a given wavfile.
     -----------------------------
@@ -78,6 +79,13 @@ def filterbank(
     num_frames = 1 + [SAMPLES(t*sr) - WINDOW_SIZE(n_fft)] / hop_length
      1-sec wav = 1 + [1*16000 - 512] / 160 = 98 (frames/sec)
     """
+
+    @torch.no_grad()
+    def norm_channel(x):
+        mean = x.mean(dim=1, keepdim=True)
+        std = x.std(dim=1, keepdim=True)
+        return (x - mean) / (std + 1e-8)
+
     y, orig_sr = f if from_ysr else readwav(f)
     if sr != orig_sr:
         y = librosa.resample(y, orig_sr=orig_sr, target_sr=sr)
@@ -91,6 +99,7 @@ def filterbank(
         fmax=fmax or sr // 2,
     )  # (C, T) = (n_mels, num_frames)
     return cf_(
+        norm_channel if normalize else id,
         torch.log,
         torch.Tensor.float,
         torch.from_numpy,
@@ -98,17 +107,31 @@ def filterbank(
     )(y)
 
 
-def tripletloss(anchor, positive, negative, margin=1.0):
+def tripletloss(anchor, positive, negative, margin=0.2):
     return F.relu(
-        F.pairwise_distance(anchor, positive)
-        - F.pairwise_distance(anchor, negative)
+        F.cosine_similarity(anchor, negative)
+        - F.cosine_similarity(anchor, positive)
         + margin
     ).mean()
 
 
 @torch.no_grad()
+def hard_indices(anchor, positive, negative, margin=0.2, k=2):
+    """Find the indices of the most challenging negatives."""
+    apsim = F.cosine_similarity(anchor, positive)
+    ansim = F.cosine_similarity(
+        anchor.unsqueeze(1),
+        negative.unsqueeze(0),
+        dim=2,
+    )
+    loss = F.relu(ansim - apsim + margin)
+    _, indices = torch.topk(loss, k=k, dim=1)
+    return indices
+
+
+@torch.no_grad()
 def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
-    """Compute mean and standard deviation of input weighted by alpha"""
+    """Compute mean and standard deviation of input weighted by alpha."""
     mean = torch.sum(alpha * x, dim=dim, keepdim=True)  # (B, C, 1)
     var = torch.sum(alpha * (x - mean).pow(2), dim=dim)
     std = torch.sqrt(var.clamp(min=eps)).unsqueeze(dim)  # (B, C, 1)
@@ -186,13 +209,16 @@ def list_models(dir=default.modelpath):
         (
             base58d(basename(f)).decode(),
             du_hs(f),
-            timeago(
-                timestamp() - timestamp(os.path.getmtime(f), to_utc=True),
-            ),
+            timestamp() - timestamp(os.path.getmtime(f), to_utc=True),
         )
         for f in ls(dir, f=True)
     ]
-    print(tabulate(data, header=mapl(str.upper, ("name", "size", "modified"))))
+    print(
+        tabulate(
+            [(n, s, timeago(t)) for n, s, t in sort(data, key=nth(3))],
+            header=mapl(str.upper, ("name", "size", "modified")),
+        ),
+    )
 
 
 def def_conf(kind=None):
@@ -479,34 +505,11 @@ def to_pairs(x):
         return [x] if isinstance(x, tuple) else list(x)
 
 
-def triplet(db, hardset=False):
+def triplet(db):
     """Get a triplet for Triplet Loss approach"""
-    if hardset:
-        anchor, positive, negative = db[randint(len(db))]
-    else:
-        anchor, positive = randpair(db, mono=True, sync=False, size=1)
-        _, negative = randpair(db, mono=False, key=speaker_id(anchor))
+    anchor, positive = randpair(db, mono=True, sync=False, size=1)
+    _, negative = randpair(db, mono=False, key=speaker_id(anchor))
     return anchor, positive, negative
-
-
-def mining_hardset(md, db, out="hardset.db", threshold=0.6, size=None):
-    """Mine the most challenging examples for models to distinguish"""
-    size = size or len(flatl(db.values())) // 10
-    o = set()
-    gathered = set()
-    while True:
-        a, b = randpair(db, mono=False)
-        if _pair_id(a, b) in gathered:
-            continue
-        gathered.add(_pair_id(a, b))
-        cosim = md.cosim(a, b)
-        if cosim > threshold:
-            o.add((a, randwav(db, key=speaker_id(a)), b))
-            o.add((b, randwav(db, key=speaker_id(b)), a))
-            print(f"{len(o):06d}  {speaker_id(a)}  {speaker_id(b)}  {cosim:.4f}")
-        if len(o) >= size:
-            break
-    write_json(out, list(o))
 
 
 def tasting(md, db, mono=False, size=10):
