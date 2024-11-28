@@ -4,6 +4,8 @@ import math
 import os
 import re
 import wave
+from bisect import bisect
+from collections import Counter
 from functools import lru_cache, partial
 
 import librosa
@@ -109,8 +111,8 @@ def filterbank(
 
 def tripletloss(anchor, positive, negative, margin=0.2):
     return F.relu(
-        F.cosine_similarity(anchor, negative)
-        - F.cosine_similarity(anchor, positive)
+        F.cosine_similarity(anchor, negative, dim=-1)
+        - F.cosine_similarity(anchor, positive, dim=-1)
         + margin
     ).mean()
 
@@ -118,14 +120,16 @@ def tripletloss(anchor, positive, negative, margin=0.2):
 @torch.no_grad()
 def hard_indices(anchor, positive, negative, margin=0.2, k=2):
     """Find the indices of the most challenging negatives."""
-    apsim = F.cosine_similarity(anchor, positive)
-    ansim = F.cosine_similarity(
-        anchor.unsqueeze(1),
-        negative.unsqueeze(0),
-        dim=2,
+    loss = F.relu(
+        F.cosine_similarity(
+            anchor.unsqueeze(1),
+            negative.unsqueeze(0),
+            dim=-1,
+        )
+        - F.cosine_similarity(anchor, positive, dim=-1)
+        + margin
     )
-    loss = F.relu(ansim - apsim + margin)
-    _, indices = torch.topk(loss, k=k, dim=1)
+    _, indices = torch.topk(loss, k=k, dim=-1)
     return indices
 
 
@@ -513,12 +517,20 @@ def triplet(db):
 
 
 def tasting(md, db, mono=False, size=10):
-    v = []
+    vs = []
     for o in randpair(db, mono=mono, size=size):
         cosim = md.cosim(*o)
         print(f"{cosim:.4f}")
-        v.append(cosim)
-    print(f"mean: {np.mean(v):.4f}")
+        vs.append(cosim)
+    bins = [-1, 0.6, 0.7, 0.8, 0.9, 1.0]
+    hist = Counter(bisect(bins, v) for v in vs)
+    print(f"mean: {np.mean(vs):.4f}")
+    print(
+        tabulate(
+            [[f"{(100*hist.get(i, 0)/size):.1f}%" for i in range(1, len(bins))]],
+            header=["<0.6", "0.6x", "0.7x", "0.8x", "0.9x"],
+        )
+    )
 
 
 def get_pre_trained():
