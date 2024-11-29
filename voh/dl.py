@@ -1,6 +1,5 @@
 import multiprocessing as mp
 import threading
-import time
 from queue import Empty, Full
 
 from .utils import *
@@ -71,34 +70,34 @@ class _safeiter:
 
 
 class _dataloader:
-    """Multi-process data loader with thread-safe iteration.
-    - Asynchronous data loading using multiple worker processes
-    - Thread-safe data retrieval from a shared queue
-    - 'pause' and 'resume' to enhance efficiency in each phase
+    """A multiprocessing-based data loader for training and evaluation datasets.
+    It supports switching between training and validation modes.
+
+    train() | switches to training mode
+     eval() | switches to validation mode
     """
 
-    def __init__(self, dataset, num_workers=1, size_queue=32):
-        self.dataset = dataset
+    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=64):
+        self.trainset = trainset
+        self.evalset = evalset
         self.num_workers = num_workers
-        self.size_queue = size_queue
-        self.queue = mp.Queue(maxsize=size_queue)
+        self.trainq = mp.Queue(maxsize=size_queue)
+        self.evalq = mp.Queue(maxsize=size_queue)
+        self.activeq = self.trainq
         self.abort = mp.Event()
-        self.hold = mp.Event()
+        self.mode = mp.Value("b", True)  # True for 'train', False for 'eval'
         self.process = None
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        if self.abort.is_set() and self.queue.empty():
-            raise StopIteration
-        try:
-            data = self.queue.get()
-            if data is None:
-                raise StopIteration
-            return data
-        except Empty:
-            return self.__next__()
+        while not self.abort.is_set() or not self.activeq.empty():
+            try:
+                return self.activeq.get()
+            except Empty:
+                continue
+        raise StopIteration
 
     def __enter__(self):
         return self.start()
@@ -107,31 +106,26 @@ class _dataloader:
         self.stop()
 
     def worker(self):
-        safe_iterator = _safeiter(iter(self.dataset))
-        threads = []
-
-        def thread_worker():
+        def thread():
             while not self.abort.is_set():
-                if self.hold.is_set():
-                    time.sleep(0.1)
-                    continue
-                try:
-                    data = next(safe_iterator)
-                    self.queue.put(data, block=False)
-                except StopIteration:
-                    break
-                except Full:
-                    time.sleep(0.1)
-                    continue
+                mode = self.mode.value
+                dataset = self.trainset if mode else self.evalset
+                queue = self.trainq if mode else self.evalq
+                for data in _safeiter(iter(dataset)):
+                    if self.abort.is_set():
+                        return
+                    if self.mode.value != mode:
+                        break
+                    try:
+                        queue.put(data, block=False)
+                    except Full:
+                        continue
 
-        for _ in range(self.num_workers):
-            t = threading.Thread(target=thread_worker)
-            t.daemon = True
+        threads = [threading.Thread(target=thread) for _ in range(self.num_workers)]
+        for t in threads:
             t.start()
-            threads.append(t)
         for t in threads:
             t.join()
-        self.queue.put(None)
 
     def start(self):
         self.process = mp.Process(target=self.worker)
@@ -142,14 +136,19 @@ class _dataloader:
         self.abort.set()
         if self.process:
             self.process.join(timeout=5)
-        while not self.queue.empty():
-            try:
-                self.queue.get(block=False)
-            except Empty:
-                break
+        for q in (self.trainq, self.evalq):
+            while not q.empty():
+                try:
+                    q.get(block=False)
+                except Empty:
+                    break
 
-    def pause(self):
-        self.hold.set()
+    def train(self):
+        with self.mode.get_lock():
+            self.mode.value = True
+        self.activeq = self.trainq
 
-    def resume(self):
-        self.hold.clear()
+    def eval(self):
+        with self.mode.get_lock():
+            self.mode.value = False
+        self.activeq = self.evalq

@@ -263,14 +263,14 @@ class voh(nn.Module):
     # Training
     # -----------
     def get_trained(self):
-        tl, vl = self.dl()  # dataloader: (training, validation)
+        dl = self.dl()  # dataloader of (training + validation) set
+        dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
-        self._loss = self._vloss = 0
         self.update_lr()
-        with tl, vl:
-            vl.pause()
+        self._loss = self._vloss = 0
+        with dl:
             for _ in tracker(range(g), "training", start=self.it, total=g):
-                anchor, positive, negative = next(tl)
+                anchor, positive, negative = next(dl)
                 self.train()
                 if self.on_interval(self.conf.int_sched_lr):
                     self.update_lr()
@@ -308,32 +308,30 @@ class voh(nn.Module):
                 self.optim.step()
                 self._loss += loss
                 if self.on_interval(self.conf.int_val):
-                    self.validate(tl, vl)
+                    self.validate(dl)
                 if self.on_interval(self.conf.size_val):
                     self.log()
                 self.it += 1
 
     @torch.no_grad()
-    def validate(self, tl, vl):
+    def validate(self, dl):
         self.eval()
-        tl.pause()
-        vl.resume()
+        dl.eval()
         self._vloss = 0
         for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = next(vl)
+            anchor, positive, negative = next(dl)
             self._vloss += tripletloss(
                 self(anchor),
                 self(positive),
                 self(negative),
                 margin=self.conf.margin_loss,
             ).item()
-        vl.pause()
-        tl.resume()
         self._vloss /= self.conf.size_val
         self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, self._vloss)
         if self.stat.vloss < self.stat.minloss:
             self.stat.minloss = self.stat.vloss
             self.checkpoint()
+        dl.train()
 
     def update_lr(self):
         self._lr = (
@@ -357,22 +355,19 @@ class voh(nn.Module):
             sr=self.conf.samplerate,
             size_batch=self.conf.size_batch,
         )
-        return (
-            _dataloader(  # training data loader
-                _dataset(
-                    self.conf.ds_train,
-                    p=self.conf.prob_aug,
-                    num_aug=self.conf.num_aug,
-                    **shared,
-                ),
-                num_workers=self.conf.num_workers,
-                size_queue=self.conf.size_batch,
+        return _dataloader(
+            _dataset(  # training dataset
+                self.conf.ds_train,
+                p=self.conf.prob_aug,
+                num_aug=self.conf.num_aug,
+                **shared,
             ),
-            _dataloader(  # validation data loader
-                _dataset(self.conf.ds_val, p=None, **shared),
-                num_workers=self.conf.num_workers,
-                size_queue=self.conf.size_batch,
+            _dataset(  # validation dataset
+                self.conf.ds_val,
+                p=None,
+                **shared,
             ),
+            num_workers=self.conf.num_workers,
         )
 
     def log(self):
