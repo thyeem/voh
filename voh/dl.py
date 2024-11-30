@@ -79,7 +79,7 @@ class _dataloader:
      eval | switch to validation mode, loading data from 'evaluation queue'.
     """
 
-    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=64):
+    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=16):
         self.trainset = trainset
         self.evalset = evalset
         self.num_workers = num_workers
