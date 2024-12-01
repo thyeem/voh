@@ -312,6 +312,7 @@ class voh(nn.Module):
                 if self.on_interval(self.conf.size_val):
                     self.log()
                 self.it += 1
+        self.checkpoint()
 
     @torch.no_grad()
     def validate(self, dl):
@@ -408,7 +409,7 @@ class voh(nn.Module):
             shell(f"cp -f {path} {d}/{basename(path)}{snap}")
         return path
 
-    def checkpoint(self, retain=20):
+    def checkpoint(self, retain=24):
         self.save(
             snap=f"-v{self.stat.vloss:.2f}-t{self.stat.loss:.2f}-{self.it:06d}",
         )
