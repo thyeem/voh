@@ -384,8 +384,6 @@ class voh(nn.Module):
         header = ["Step", "lr", "Loss", "Loss(EMA)", "vLoss", "vLoss(EMA)"]
         print(tabulate([record], header=header, fn=" " * 10 + _))
         self._loss = 0
-        if self.on_interval(self.conf.steps // 20):
-            self.checkpoint()
 
     def save(self, name=None, snap=None):
         name = name or self.name
@@ -410,7 +408,7 @@ class voh(nn.Module):
             shell(f"cp -f {path} {d}/{basename(path)}{snap}")
         return path
 
-    def checkpoint(self, retain=12):
+    def checkpoint(self, retain=20):
         self.save(
             snap=f"-v{self.stat.vloss:.2f}-t{self.stat.loss:.2f}-{self.it:06d}",
         )
