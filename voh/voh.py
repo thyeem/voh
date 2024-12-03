@@ -155,7 +155,7 @@ class voh(nn.Module):
         guard(
             self.conf.k_negatives <= self.conf.size_batch,
             f"error, number of hard negatives ({self.conf.k_negatives}) "
-            f"must be less than batch size ({self.conf.conf.size_batch})",
+            f"must be less than batch size ({self.conf.size_batch})",
         )
         train and guard(
             self.conf.size_in_enc == self.conf.num_mel_filters,

@@ -38,20 +38,24 @@ class _dataset:
 
     def __iter__(self):
         while True:
-            anchors, positives, negatives = zip(
-                *(
-                    map(
-                        self.processor,
-                        triplet(self.db),
+            anchors, positives, negatives = map(
+                pad_,
+                zip(
+                    *(
+                        map(
+                            self.processor,
+                            triplet(self.db),
+                        )
+                        for _ in range(self.size_batch)
                     )
-                    for _ in range(self.size_batch)
-                )
+                ),
             )
-            yield (
-                pad_(anchors),
-                pad_(positives),
-                pad_(negatives),
-            )
+            # length-check (temporary workaround)
+            al = {x.size(-1) for x in anchors}
+            pl = {x.size(-1) for x in positives}
+            nl = {x.size(-1) for x in negatives}
+            if len(al) == 1 and len(pl) == 1 and len(nl) == 1:
+                yield (anchors, positives, negatives)
 
 
 class _safeiter:
@@ -79,7 +83,7 @@ class _dataloader:
      eval | switch to validation mode, loading data from 'evaluation queue'.
     """
 
-    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=16):
+    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=64):
         self.trainset = trainset
         self.evalset = evalset
         self.num_workers = num_workers
