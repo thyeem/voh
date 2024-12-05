@@ -420,17 +420,25 @@ def randwav(db, key=None, size=1):
     """Get a random speaker wav file from the given indexed data
     if 'key' is given, returns a wav-file whose label contains 'key'
     """
-
-    def jar(x):
-        speakers = list(x)
-        q = key or choice(speakers)
-        err = f_(error, f"No matching key found: {q}")
-        return grep(rf"{q}")(speakers) or err()
-
-    def wav(x):
-        return cf_(f_(normpath, abs=True), choice, db.get, choice, jar)(x)
-
-    return wav(db) if size == 1 else [wav(db) for _ in range(size)]
+    return cf_(
+        fst if size == 1 else id,
+        (
+            cf_(
+                mapl(f_(normpath, abs=True)),
+                choice(size=size),
+                db.get,
+                choice,
+                guard_(bool, f"No matching key found: {key}"),
+                grep(rf"{key}"),
+            )
+            if key
+            else cf_(
+                mapl(cf_(f_(normpath, abs=True), choice, db.get)),
+                choice(size=size),
+            )
+        ),
+        list,
+    )(db)
 
 
 @fx
@@ -497,7 +505,7 @@ def randpair(db, mono=False, sync=False, key=None, size=1):
 
 
 def to_pairs(x):
-    """Ensure the given data is in pair form"""
+    """Ensure the given data is in pair form."""
     if isinstance(x, str):
         return mapl(
             cf_(
@@ -509,10 +517,23 @@ def to_pairs(x):
         return [x] if isinstance(x, tuple) else list(x)
 
 
-def triplet(db):
-    """Get a triplet for Triplet Loss approach"""
-    anchor, positive = randpair(db, mono=True, sync=False, size=1)
-    _, negative = randpair(db, mono=False, key=speaker_id(anchor))
+def triplet(db, size=1):
+    """Get a triplet of (anchor, positive, negative) pairs."""
+
+    def nodup(db, x):
+        tol = 0
+        while True:
+            o = randwav(db, key=speaker_id(x))
+            if o != x:
+                return o
+            if tol > 3:
+                break
+            tol += 1
+        return x
+
+    r = randwav(db, size=size * 2)
+    anchor, negative = r[:size], r[size:]
+    positive = [nodup(db, a) for a in anchor]
     return anchor, positive, negative
 
 

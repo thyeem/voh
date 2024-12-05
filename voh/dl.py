@@ -37,25 +37,11 @@ class _dataset:
         )
 
     def __iter__(self):
-        while True:
-            anchors, positives, negatives = map(
-                pad_,
-                zip(
-                    *(
-                        map(
-                            self.processor,
-                            triplet(self.db),
-                        )
-                        for _ in range(self.size_batch)
-                    )
-                ),
-            )
-            # length-check (temporary workaround)
-            al = {x.size(-1) for x in anchors}
-            pl = {x.size(-1) for x in positives}
-            nl = {x.size(-1) for x in negatives}
-            if len(al) == 1 and len(pl) == 1 and len(nl) == 1:
-                yield (anchors, positives, negatives)
+        anchors, positives, negatives = map(
+            cf_(pad_, mapl(self.processor)),
+            triplet(self.db, size=self.size_batch),
+        )
+        yield anchors, positives, negatives
 
 
 class _safeiter:
@@ -83,7 +69,7 @@ class _dataloader:
      eval | switch to validation mode, loading data from 'evaluation queue'.
     """
 
-    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=64):
+    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=32):
         self.trainset = trainset
         self.evalset = evalset
         self.num_workers = num_workers
@@ -128,8 +114,7 @@ class _dataloader:
                         continue
 
         threads = [
-            threading.Thread(target=worker_thread, daemon=True)
-            for _ in range(self.num_workers)
+            threading.Thread(target=worker_thread) for _ in range(self.num_workers)
         ]
         for t in threads:
             t.start()
