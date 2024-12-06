@@ -37,11 +37,12 @@ class _dataset:
         )
 
     def __iter__(self):
-        anchors, positives, negatives = map(
-            cf_(pad_, mapl(self.processor)),
-            triplet(self.db, size=self.size_batch),
-        )
-        yield anchors, positives, negatives
+        while True:
+            anchors, positives, negatives = map(
+                cf_(pad_, mapl(self.processor)),
+                triplet(self.db, size=self.size_batch),
+            )
+            yield anchors, positives, negatives
 
 
 class _safeiter:

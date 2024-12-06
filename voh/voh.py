@@ -277,9 +277,9 @@ class voh(nn.Module):
                 self.optim.zero_grad(set_to_none=True)
 
                 # generate embeddings
-                anchor = self(anchor)
-                positive = self(positive)
-                negative = self(negative)
+                anchor = F.normalize(self(anchor), dim=-1)
+                positive = F.normalize(self(positive), dim=-1)
+                negative = F.normalize(self(negative), dim=-1)
 
                 if rand() < self.conf.prob_mining:
                     loss = tripletloss(  # online hard mining tripletloss

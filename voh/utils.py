@@ -110,27 +110,43 @@ def filterbank(
 
 
 def tripletloss(anchor, positive, negative, margin=0.2):
-    return F.relu(
+    def loss(x):
+        return cf_(
+            ob(_.mean)(),
+            F.relu,
+            _ + x,
+            ob(_.clamp)(min=0.2, max=margin),
+        )(x)
+
+    return loss(
         F.cosine_similarity(anchor, negative, dim=-1)
-        - F.cosine_similarity(anchor, positive, dim=-1)
-        + margin
-    ).mean()
+        - F.cosine_similarity(anchor, positive, dim=-1),
+    )
 
 
 @torch.no_grad()
 def hard_indices(anchor, positive, negative, margin=0.2, k=2):
     """Find the indices of the most challenging negatives."""
-    loss = F.relu(
+
+    def loss(x):
+        return cf_(
+            F.relu,
+            _ + x,
+            ob(_.clamp)(min=0.2, max=margin),
+        )(x)
+
+    return cf_(
+        snd,
+        ob(_.topk)(k=k, dim=-1),
+        loss,
+    )(
         F.cosine_similarity(
             anchor.unsqueeze(1),
             negative.unsqueeze(0),
             dim=-1,
-        )
-        - F.cosine_similarity(anchor, positive, dim=-1)
-        + margin
+        )  # anchor-negative matrix
+        - F.cosine_similarity(anchor, positive, dim=-1),
     )
-    _, indices = torch.topk(loss, k=k, dim=-1)
-    return indices
 
 
 @torch.no_grad()
@@ -538,14 +554,14 @@ def triplet(db, size=1):
 
 
 def tasting(md, db, mono=False, size=10):
-    vs = []
+    cosims = []
     for o in randpair(db, mono=mono, size=size):
         cosim = md.cosim(*o)
         print(f"{cosim:.4f}")
-        vs.append(cosim)
+        cosims.append(cosim)
     bins = [-1, 0.6, 0.7, 0.8, 0.9, 1.0]
-    hist = Counter(bisect(bins, v) for v in vs)
-    print(f"mean: {np.mean(vs):.4f}")
+    hist = Counter(bisect(bins, cosim) for cosim in cosims)
+    print(f"mean: {np.mean(cosims):.4f}")
     print(
         tabulate(
             [[f"{(100*hist.get(i, 0)/size):.1f}%" for i in range(1, len(bins))]],
