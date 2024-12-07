@@ -125,27 +125,16 @@ def tripletloss(anchor, positive, negative, margin=0.2):
 
 
 @torch.no_grad()
-def hard_indices(anchor, positive, negative, margin=0.2, k=2):
+def hard_indices(anchor, negative, k=2):
     """Find the indices of the most challenging negatives."""
-
-    def loss(x):
-        return cf_(
-            F.relu,
-            _ + x,
-            ob(_.clamp)(min=0.2, max=margin),
-        )(x)
-
     return cf_(
         snd,
         ob(_.topk)(k=k, dim=-1),
-        loss,
+        F.cosine_similarity,
     )(
-        F.cosine_similarity(
-            anchor.unsqueeze(1),
-            negative.unsqueeze(0),
-            dim=-1,
-        )  # anchor-negative matrix
-        - F.cosine_similarity(anchor, positive, dim=-1),
+        anchor.unsqueeze(1),
+        negative.unsqueeze(0),
+        dim=-1,
     )
 
 

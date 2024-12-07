@@ -286,13 +286,7 @@ class voh(nn.Module):
                         anchor.unsqueeze(1),
                         positive.unsqueeze(1),
                         negative[
-                            hard_indices(
-                                anchor,
-                                positive,
-                                negative,
-                                margin=self.conf.margin_loss,
-                                k=self.conf.k_negatives,
-                            )
+                            hard_indices(anchor, negative, k=self.conf.k_negatives)
                         ],
                         margin=self.conf.margin_loss,
                     )
