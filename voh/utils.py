@@ -110,18 +110,15 @@ def filterbank(
 
 
 def tripletloss(anchor, positive, negative, margin=0.2):
-    def loss(x):
-        return cf_(
-            ob(_.mean)(),
-            F.relu,
-            _ + x,
-            ob(_.clamp)(min=0.2, max=margin),
-        )(x)
+    def add_margin(x):
+        return x + torch.clamp(x, min=0.2, max=margin)
 
-    return loss(
-        F.cosine_similarity(anchor, negative, dim=-1)
-        - F.cosine_similarity(anchor, positive, dim=-1),
-    )
+    return F.relu(
+        add_margin(
+            F.cosine_similarity(anchor, negative, dim=-1)
+            - F.cosine_similarity(anchor, positive, dim=-1),
+        )
+    ).mean()
 
 
 @torch.no_grad()
