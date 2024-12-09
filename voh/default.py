@@ -46,6 +46,7 @@ conf = dmap(
     num_aug=(META, 3),
     prob_aug=(META, 0.3),
     k_negatives=(META, 2),  # number of hard negatives
+    k_positives=(META, 2),  # number of hard positives
     prob_mining=(META, 0),  # probability of hard negative mining
 )
 

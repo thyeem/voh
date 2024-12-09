@@ -122,17 +122,26 @@ def tripletloss(anchor, positive, negative, margin=0.2):
 
 
 @torch.no_grad()
-def hard_indices(anchor, negative, k=2):
+def hard_negatives(anchor, negative, k=2):
     """Find the indices of the most challenging negatives."""
     return cf_(
         snd,
         ob(_.topk)(k=k, dim=-1),
         F.cosine_similarity,
-    )(
-        anchor.unsqueeze(1),
-        negative.unsqueeze(0),
-        dim=-1,
-    )
+    )(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
+
+
+@torch.no_grad()
+def hard_positives(anchor, positive, k=2):
+    """Find the indices of the most challenging positives."""
+    B = anchor.size(0)
+    return cf_(
+        _[:B],
+        ob(_.repeat)(B // k + 1),
+        snd,
+        ob(_.topk)(k=k, dim=-1, largest=False),
+        F.cosine_similarity,
+    )(anchor, positive, dim=-1)
 
 
 @torch.no_grad()
@@ -528,7 +537,7 @@ def triplet(db, size=1):
             o = randwav(db, key=speaker_id(x))
             if o != x:
                 return o
-            if tol > 3:
+            if tol > 5:
                 break
             tol += 1
         return x

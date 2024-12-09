@@ -157,6 +157,11 @@ class voh(nn.Module):
             f"error, number of hard negatives ({self.conf.k_negatives}) "
             f"must be less than batch size ({self.conf.size_batch})",
         )
+        guard(
+            self.conf.k_positives <= self.conf.size_batch,
+            f"error, number of hard positives ({self.conf.k_positives}) "
+            f"must be less than batch size ({self.conf.size_batch})",
+        )
         train and guard(
             self.conf.size_in_enc == self.conf.num_mel_filters,
             f"error, input size({self.conf.size_in_enc}) of"
@@ -282,12 +287,12 @@ class voh(nn.Module):
                 negative = F.normalize(self(negative), dim=-1)
 
                 if rand() < self.conf.prob_mining:
+                    i = hard_negatives(anchor, negative, k=self.conf.k_negatives)
+                    j = hard_positives(anchor, positive, k=self.conf.k_positives)
                     loss = tripletloss(  # online hard mining tripletloss
-                        anchor.unsqueeze(1),
-                        positive.unsqueeze(1),
-                        negative[
-                            hard_indices(anchor, negative, k=self.conf.k_negatives)
-                        ],
+                        anchor[j].unsqueeze(1),
+                        positive[j].unsqueeze(1),
+                        negative[i][j],
                         margin=self.conf.margin_loss,
                     )
                 else:
