@@ -109,9 +109,9 @@ def filterbank(
     )(y)
 
 
-def tripletloss(anchor, positive, negative, margin=0.2):
+def tripletloss(anchor, positive, negative, margin=0.3):
     def add_margin(x):
-        return x + torch.clamp(x, min=0.2, max=margin)
+        return x + torch.clamp(x, min=0.1, max=margin)
 
     return F.relu(
         add_margin(
@@ -136,8 +136,6 @@ def hard_positives(anchor, positive, k=2):
     """Find the indices of the most challenging positives."""
     B = anchor.size(0)
     return cf_(
-        _[:B],
-        ob(_.repeat)(B // k + 1),
         snd,
         ob(_.topk)(k=k, dim=-1, largest=False),
         F.cosine_similarity,

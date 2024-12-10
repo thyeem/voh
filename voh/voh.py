@@ -290,9 +290,9 @@ class voh(nn.Module):
                     i = hard_negatives(anchor, negative, k=self.conf.k_negatives)
                     j = hard_positives(anchor, positive, k=self.conf.k_positives)
                     loss = tripletloss(  # online hard mining tripletloss
-                        anchor[j].unsqueeze(1),
-                        positive[j].unsqueeze(1),
-                        negative[i][j],
+                        torch.cat((anchor, anchor[j])).unsqueeze(1),
+                        torch.cat((positive, positive[j])).unsqueeze(1),
+                        torch.cat((negative[i], negative[i][j])),
                         margin=self.conf.margin_loss,
                     )
                 else:
