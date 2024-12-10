@@ -109,9 +109,9 @@ def filterbank(
     )(y)
 
 
-def tripletloss(anchor, positive, negative, margin=0.3):
+def tripletloss(anchor, positive, negative, min=0.2, max=0.3):
     def add_margin(x):
-        return x + torch.clamp(x, min=0.1, max=margin)
+        return x + torch.clamp(x, min=min, max=max)
 
     return F.relu(
         add_margin(

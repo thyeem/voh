@@ -293,14 +293,16 @@ class voh(nn.Module):
                         torch.cat((anchor, anchor[j])).unsqueeze(1),
                         torch.cat((positive, positive[j])).unsqueeze(1),
                         torch.cat((negative[i], negative[i][j])),
-                        margin=self.conf.margin_loss,
+                        min=self.conf.min_margin,
+                        max=self.conf.max_margin,
                     )
                 else:
                     loss = tripletloss(  # vanilla tripletloss
                         anchor,
                         positive,
                         negative,
-                        margin=self.conf.margin_loss,
+                        min=self.conf.min_margin,
+                        max=self.conf.max_margin,
                     )
 
                 loss.backward()
@@ -324,7 +326,8 @@ class voh(nn.Module):
                 self(anchor),
                 self(positive),
                 self(negative),
-                margin=self.conf.margin_loss,
+                min=self.conf.min_margin,
+                max=self.conf.max_margin,
             ).item()
         self._vloss /= self.conf.size_val
         self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, self._vloss)
