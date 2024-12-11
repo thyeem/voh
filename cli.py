@@ -199,7 +199,7 @@ def rm(models):
     for model in models:
         path = which_model(model)
         if path:
-            shell(f"rm -rf {path} {path}.snap 2>/dev/null")
+            shell(f"rm -rf {path} {path}.ckpt 2>/dev/null")
             print(f"deleted '{model}'")
 
 

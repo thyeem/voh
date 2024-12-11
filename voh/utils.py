@@ -209,7 +209,8 @@ def which_model(name, dir=default.modelpath):
 
 
 def path_model(name, dir=default.modelpath):
-    return f"{dir}/{base58e(name.encode())}"
+    nick = name.encode().decode("ascii", errors="ignore")
+    return f"{dir}/{nick}-{base58e(name.encode())}"
 
 
 def size_model(name):

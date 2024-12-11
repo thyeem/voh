@@ -142,7 +142,7 @@ class voh(nn.Module):
     def finalize(self):
         torch._dynamo.config.suppress_errors = True
         torch._logging.set_logs(dynamo=logging.ERROR)
-        torch._dynamo.eval_frame.OptimizedModule.__repr__ = lambda x: ""
+        torch._dynamo.eval_frame.OptimizedModule.__repr__ = self.__repr__
         return self.into().optimize()
 
     def guards(self, train=False):
@@ -236,7 +236,7 @@ class voh(nn.Module):
         dumper(**o)
 
     def __repr__(self):
-        return ""
+        return self.name if hasattr(self, "name") else ""
 
     def forward(self, x):
         x = x.to(device=self.device)
@@ -378,7 +378,7 @@ class voh(nn.Module):
         self.stat.loss = ema(alpha=self.stat.alpha)(self.stat.loss, loss)
         record = [
             f"{self.it:06d}",
-            f"{self._lr:.6f}",
+            f"{self._lr:.8f}",
             f"{loss:.4f}",
             f"{self.stat.loss:.4f}",
             f"{self._vloss:.4f}",
@@ -388,7 +388,7 @@ class voh(nn.Module):
         print(tabulate([record], header=header, fn=" " * 10 + _))
         self._loss = 0
 
-    def save(self, name=None, snap=None):
+    def save(self, name=None, ckpt=None):
         name = name or self.name
         if null(name):
             error("The model name is not specified.")
@@ -405,17 +405,17 @@ class voh(nn.Module):
             ),
             normpath(path),
         )
-        if snap:
-            d = f"{path}.snap"
+        if ckpt:
+            d = f"{path}.ckpt"
             mkdir(d)
-            shell(f"cp -f {path} {d}/{basename(path)}{snap}")
+            shell(f"cp -f {path} {d}/{basename(path)}{ckpt}")
         return path
 
     def checkpoint(self, retain=24):
         self.save(
-            snap=f"-v{self.stat.vloss:.2f}-t{self.stat.loss:.2f}-{self.it:06d}",
+            ckpt=f"-v{self.stat.vloss:.3f}-t{self.stat.loss:.3f}-{self.it:06d}",
         )
-        path = f"{path_model(self.name)}.snap"
+        path = f"{path_model(self.name)}.ckpt"
         for f in shell(f"find {path} -type f | sort -V")[retain:]:
             os.remove(f)
 
