@@ -70,7 +70,7 @@ class _dataloader:
      eval | switch to validation mode, loading data from 'evaluation queue'.
     """
 
-    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=8):
+    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=32):
         self.trainset = trainset
         self.evalset = evalset
         self.num_workers = num_workers
@@ -78,10 +78,8 @@ class _dataloader:
         self.evalq = mp.Queue(maxsize=size_queue)
         self.activeq = self.trainq
         self.abort = mp.Event()
-        self.swap = mp.Event()
         self.mode = mp.Value("b", True)  # True for 'train', False for 'eval'
-        self.vote = mp.Value("i", 0)
-        self.processes = []
+        self.process = None
 
     def __iter__(self):
         return self
@@ -101,37 +99,38 @@ class _dataloader:
         self.stop()
 
     def worker(self):
-        mode = True
-        while not self.abort.is_set():
-            if self.swap.is_set():
+        def worker_thread():
+            while not self.abort.is_set():
                 mode = self.mode.value
-                with self.vote.get_lock():
-                    self.vote.value += 1
-                    if self.vote.value == self.num_workers:
-                        self.swap.clear()
-                        self.vote.value = 0
-            dataset = self.trainset if mode else self.evalset
-            queue = self.trainq if mode else self.evalq
-            for data in iter(dataset):
-                if self.abort.is_set() or self.swap.is_set():
-                    break
-                try:
-                    queue.put(data, block=True)
-                except Full:
-                    continue
+                dataset = self.trainset if mode else self.evalset
+                queue = self.trainq if mode else self.evalq
+                for data in _safeiter(iter(dataset)):
+                    if self.abort.is_set():
+                        return
+                    if self.mode.value != mode:
+                        break
+                    try:
+                        queue.put(data, block=False)
+                    except Full:
+                        continue
+
+        threads = [
+            threading.Thread(target=worker_thread) for _ in range(self.num_workers)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     def start(self):
-        self.processes = [
-            mp.Process(target=self.worker) for i in range(self.num_workers)
-        ]
-        for p in self.processes:
-            p.start()
+        self.process = mp.Process(target=self.worker)
+        self.process.start()
         return self
 
     def stop(self):
         self.abort.set()
-        for p in self.processes:
-            p.join(timeout=3)
+        if self.process:
+            self.process.join(timeout=5)
         for q in (self.trainq, self.evalq):
             while not q.empty():
                 try:
@@ -139,17 +138,12 @@ class _dataloader:
                 except Empty:
                     break
 
-    def set_mode(self, mode):
-        with self.mode.get_lock():
-            if self.mode.value != mode:
-                self.mode.value = mode
-                self.swap.set()
-                self.activeq = self.trainq if mode else self.evalq
-                while self.swap.is_set():
-                    pass  # wait for all workers to be switched.
-
     def train(self):
-        self.set_mode(True)
+        with self.mode.get_lock():
+            self.mode.value = True
+        self.activeq = self.trainq
 
     def eval(self):
-        self.set_mode(False)
+        with self.mode.get_lock():
+            self.mode.value = False
+        self.activeq = self.evalq
