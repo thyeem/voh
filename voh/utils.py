@@ -219,9 +219,16 @@ def size_model(name):
 
 
 def list_models(dir=default.modelpath):
+    def model_name(f):
+        o = f.split("-")
+        if len(o) > 1:
+            return base58d(o[-1]).decode()
+        else:
+            error(f"Error, found invalid model path: {f}")
+
     data = [
         (
-            base58d(basename(f)).decode(),
+            model_name(f),
             du_hs(f),
             timestamp() - timestamp(os.path.getmtime(f), to_utc=True),
         )
