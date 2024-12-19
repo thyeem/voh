@@ -293,11 +293,11 @@ class voh(nn.Module):
                 )
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
                 self.optim.step()
 
                 self._loss += loss
-                if self.on_interval(self.conf.int_val):
+                if self.on_interval(self.conf.int_val) and not self.on_warmup():
                     self.validate(dl)
                 if self.on_interval(self.conf.size_val):
                     self.log()
@@ -415,3 +415,6 @@ class voh(nn.Module):
 
     def on_interval(self, val):
         return self.it and self.it % val == 0
+
+    def on_warmup(self):
+        return self.it <= int(self.conf.steps * self.conf.ratio_warmup)
