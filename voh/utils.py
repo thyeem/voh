@@ -124,8 +124,9 @@ def triplet_contrastive_loss(
         """Add dynamic margins to triplet loss"""
         return x + torch.clamp(x, min=margin_min, max=margin_max)
 
-    ap = F.cosine_similarity(anchor, positive, dim=-1)
-    an = F.cosine_similarity(anchor, negative, dim=-1)
+    cosim = F.cosine_similarity
+    ap = cosim(anchor, positive, dim=-1)
+    an = cosim(anchor, negative, dim=-1)
     logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau
     labels = torch.zeros(logits.shape[0], dtype=torch.long, device=logits.device)
     contrastive = F.cross_entropy(logits, labels)
@@ -133,8 +134,8 @@ def triplet_contrastive_loss(
     # online hard negative mining
     if rand() < prob_mining:
         i = hard_mining(anchor, negative, k=num_mining)
-        ap = F.cosine_similarity(anchor.unsqueeze(1), positive.unsqueeze(1), dim=-1)
-        an = F.cosine_similarity(anchor.unsqueeze(1), negative[i], dim=-1)
+        ap = cosim(anchor.unsqueeze(1), positive.unsqueeze(1), dim=-1)
+        an = cosim(anchor.unsqueeze(1), negative[i], dim=-1)
     triplet = F.relu(add_margin(an - ap)).mean()
     return alpha * triplet + (1 - alpha) * contrastive
 

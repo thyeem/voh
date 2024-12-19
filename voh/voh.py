@@ -293,6 +293,7 @@ class voh(nn.Module):
                 )
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
                 self.optim.step()
 
                 self._loss += loss
