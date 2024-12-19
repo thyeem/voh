@@ -28,8 +28,10 @@ conf = dmap(
     ds_val=(META, None),
     reset=(META, False),
     seed=(META, None),
-    min_margin=(META, 0.2),
-    max_margin=(META, 0.3),
+    alpha=(META, 0.5),
+    tau=(META, 0.07),
+    margin_min=(META, 0.2),
+    margin_max=(META, 0.3),
     weight_decay=(META, 1e-4),
     momentum=(META, 0.9),
     betas=(META, (0.9, 0.999)),
@@ -46,9 +48,8 @@ conf = dmap(
     num_workers=(META, 2),
     num_aug=(META, 3),
     prob_aug=(META, 0.3),
-    k_negatives=(META, 2),  # number of hard negatives
-    k_positives=(META, 2),  # number of hard positives
-    prob_mining=(META, 0),  # probability of hard negative mining
+    num_mining=(META, 2),  # number of hard-negative mining
+    prob_mining=(META, 0),  # probability of hard-negative mining
 )
 
 modelpath = f"{dirname(__file__)}/../o"

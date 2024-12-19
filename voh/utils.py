@@ -109,37 +109,44 @@ def filterbank(
     )(y)
 
 
-def tripletloss(anchor, positive, negative, min=0.2, max=0.3):
+def triplet_contrastive_loss(
+    anchor,
+    positive,
+    negative,
+    margin_min=0.2,
+    margin_max=0.3,
+    alpha=0.5,
+    tau=0.07,
+    num_mining=2,
+    prob_mining=0,
+):
     def add_margin(x):
-        return x + torch.clamp(x, min=min, max=max)
+        """Add dynamic margins to triplet loss"""
+        return x + torch.clamp(x, min=margin_min, max=margin_max)
 
-    return F.relu(
-        add_margin(
-            F.cosine_similarity(anchor, negative, dim=-1)
-            - F.cosine_similarity(anchor, positive, dim=-1),
-        )
-    ).mean()
+    ap = F.cosine_similarity(anchor, positive, dim=-1)
+    an = F.cosine_similarity(anchor, negative, dim=-1)
+    logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau
+    labels = torch.zeros(logits.shape[0], dtype=torch.long, device=logits.device)
+    contrastive = F.cross_entropy(logits, labels)
+
+    # online hard negative mining
+    if rand() < prob_mining:
+        i = hard_mining(anchor, negative, k=num_mining)
+        ap = F.cosine_similarity(anchor.unsqueeze(1), positive.unsqueeze(1), dim=-1)
+        an = F.cosine_similarity(anchor.unsqueeze(1), negative[i], dim=-1)
+    triplet = F.relu(add_margin(an - ap)).mean()
+    return alpha * triplet + (1 - alpha) * contrastive
 
 
 @torch.no_grad()
-def hard_negatives(anchor, negative, k=2):
+def hard_mining(anchor, negative, k=2):
     """Find the indices of the most challenging negatives."""
     return cf_(
         snd,
         ob(_.topk)(k=k, dim=-1),
         F.cosine_similarity,
     )(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
-
-
-@torch.no_grad()
-def hard_positives(anchor, positive, k=2):
-    """Find the indices of the most challenging positives."""
-    B = anchor.size(0)
-    return cf_(
-        snd,
-        ob(_.topk)(k=k, dim=-1, largest=False),
-        F.cosine_similarity,
-    )(anchor, positive, dim=-1)
 
 
 @torch.no_grad()

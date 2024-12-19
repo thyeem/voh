@@ -153,13 +153,8 @@ class voh(nn.Module):
             f"({self.conf.size_in_dec}) of the decoder.",
         )
         guard(
-            self.conf.k_negatives <= self.conf.size_batch,
-            f"error, number of hard negatives ({self.conf.k_negatives}) "
-            f"must be less than batch size ({self.conf.size_batch})",
-        )
-        guard(
-            self.conf.k_positives <= self.conf.size_batch,
-            f"error, number of hard positives ({self.conf.k_positives}) "
+            self.conf.num_mining <= self.conf.size_batch,
+            f"error, number of hard negatives ({self.conf.num_mining}) "
             f"must be less than batch size ({self.conf.size_batch})",
         )
         train and guard(
@@ -275,38 +270,31 @@ class voh(nn.Module):
         self._loss = self._vloss = 0
         with dl:
             for _ in tracker(range(g), "training", start=self.it, total=g):
-                anchor, positive, negative = next(dl)
                 self.train()
                 if self.on_interval(self.conf.int_sched_lr):
                     self.update_lr()
+
+                # load triplet -> model-pass -> normalize
+                anchor, positive, negative = map(
+                    cf_(f_(F.normalize, dim=-1), self),
+                    next(dl),
+                )
+                # loss = triplet-loss + contrastive-loss
+                loss = triplet_contrastive_loss(
+                    anchor,
+                    positive,
+                    negative,
+                    margin_min=self.conf.margin_min,
+                    margin_max=self.conf.margin_max,
+                    alpha=self.conf.alpha,
+                    tau=self.conf.tau,
+                    num_mining=self.conf.num_mining,
+                    prob_mining=self.conf.prob_mining,
+                )
                 self.optim.zero_grad(set_to_none=True)
-
-                # generate embeddings
-                anchor = F.normalize(self(anchor), dim=-1)
-                positive = F.normalize(self(positive), dim=-1)
-                negative = F.normalize(self(negative), dim=-1)
-
-                if rand() < self.conf.prob_mining:
-                    i = hard_negatives(anchor, negative, k=self.conf.k_negatives)
-                    j = hard_positives(anchor, positive, k=self.conf.k_positives)
-                    loss = tripletloss(  # online hard mining tripletloss
-                        torch.cat((anchor, anchor[j])).unsqueeze(1),
-                        torch.cat((positive, positive[j])).unsqueeze(1),
-                        torch.cat((negative[i], negative[i][j])),
-                        min=self.conf.min_margin,
-                        max=self.conf.max_margin,
-                    )
-                else:
-                    loss = tripletloss(  # vanilla tripletloss
-                        anchor,
-                        positive,
-                        negative,
-                        min=self.conf.min_margin,
-                        max=self.conf.max_margin,
-                    )
-
                 loss.backward()
                 self.optim.step()
+
                 self._loss += loss
                 if self.on_interval(self.conf.int_val):
                     self.validate(dl)
@@ -321,13 +309,18 @@ class voh(nn.Module):
         dl.eval()
         self._vloss = 0
         for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = next(dl)
-            self._vloss += tripletloss(
-                self(anchor),
-                self(positive),
-                self(negative),
-                min=self.conf.min_margin,
-                max=self.conf.max_margin,
+            anchor, positive, negative = map(
+                cf_(f_(F.normalize, dim=-1), self),
+                next(dl),
+            )
+            self._vloss += triplet_contrastive_loss(
+                anchor,
+                positive,
+                negative,
+                margin_min=self.conf.margin_min,
+                margin_max=self.conf.margin_max,
+                alpha=self.conf.alpha,
+                tau=self.conf.tau,
             ).item()
         self._vloss /= self.conf.size_val
         self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, self._vloss)
