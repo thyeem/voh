@@ -18,6 +18,7 @@ class _dataset:
         path,
         n_mels=80,
         sr=16000,
+        max_frames=400,
         size_batch=1,
         p=None,
         num_aug=1,
@@ -28,7 +29,12 @@ class _dataset:
         self.db = read_json(path)
         self.size_batch = size_batch
         self.processor = cf_(  # log Mel-filterbanks
-            filterbank(n_mels=n_mels, sr=sr, from_ysr=bool(p)),
+            filterbank(
+                n_mels=n_mels,
+                sr=sr,
+                max_frames=max_frames,
+                from_ysr=bool(p),
+            ),
             (  # data augmentor
                 id  # never augment data when validation set
                 if not p

@@ -24,6 +24,7 @@ conf = dmap(
     # -----------------------
     num_mel_filters=(META, 80),
     samplerate=(META, 16000),
+    max_frames=(META, 400),
     ds_train=(META, None),
     ds_val=(META, None),
     reset=(META, False),

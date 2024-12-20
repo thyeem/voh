@@ -64,6 +64,7 @@ def filterbank(
     n_mels=80,
     fmin=0,
     fmax=None,
+    max_frames=None,
     from_ysr=False,
     normalize=True,
 ):
@@ -102,6 +103,7 @@ def filterbank(
     )  # (C, T) = (n_mels, num_frames)
     return cf_(
         norm_channel if normalize else id,
+        _[:, :max_frames] if max_frames else id,
         torch.log,
         torch.Tensor.float,
         torch.from_numpy,
@@ -160,21 +162,21 @@ def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
 
 
 @torch.no_grad()
-def create_mask(x, max_len=None, pad=0):
+def create_mask(x, max_frames=None, pad=0):
     """Creates a mask based on a given input: dim of (B, 1, T)"""
-    lengths = torch.any(x != pad, dim=1).sum(dim=1)
-    B = lengths.size(0)
-    T = torch.max(lengths).item() if max_len is None else max_len
+    num_frames = torch.any(x != pad, dim=1).sum(dim=-1)
+    B = num_frames.size(0)
+    T = torch.max(num_frames).item() if max_frames is None else max_frames
     return (
-        torch.arange(T, device=x.device).expand(B, T) < lengths.unsqueeze(1)
+        torch.arange(T, device=x.device).expand(B, T) < num_frames.unsqueeze(1)
     ).unsqueeze(1)
 
 
-def pad_(o, ipad=0):
+def pad_(o, max_frames=None, ipad=0):
     """Pad along the last ``dim`` so that it's the same dimenstion.
     Assueming that ``o`` has dimensions of ``(B, C, T)``.
     """
-    L = max(x.size(-1) for x in o)
+    L = max(x.size(-1) for x in o) if max_frames is None else max_frames
     return torch.stack(
         [F.pad(x, (0, L - x.size(1)), value=ipad).squeeze() for x in o],
     )
@@ -568,7 +570,7 @@ def tasting(md, db, mono=False, size=10):
         cosim = md.cosim(*o)
         print(f"{cosim:.4f}")
         cosims.append(cosim)
-    bins = [-1, 0.6, 0.7, 0.8, 0.9, 1.0]
+    bins = [-1, 0.6, 0.7, 0.8, 0.9, 1.01]
     hist = Counter(bisect(bins, cosim) for cosim in cosims)
     print(f"mean: {np.mean(cosims):.4f}")
     print(

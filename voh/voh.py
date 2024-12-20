@@ -233,9 +233,10 @@ class voh(nn.Module):
     def __repr__(self):
         return self.name if hasattr(self, "name") else ""
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         x = x.to(device=self.device)
-        mask = create_mask(x)
+        if mask is None:
+            mask = create_mask(x)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
@@ -245,7 +246,12 @@ class voh(nn.Module):
     def fb(self, f):
         """Load a given wav file in forms of log Mel-filterbank energies"""
         return (
-            filterbank(f, n_mels=self.conf.num_mel_filters, sr=self.conf.samplerate)
+            filterbank(
+                f,
+                n_mels=self.conf.num_mel_filters,
+                sr=self.conf.samplerate,
+                max_frames=self.conf.max_frames,
+            )
             .unsqueeze(0)
             .to(device=self.device)
         )
@@ -350,6 +356,7 @@ class voh(nn.Module):
         shared = dict(  # shared keywords for dataset
             n_mels=self.conf.num_mel_filters,
             sr=self.conf.samplerate,
+            max_frames=self.conf.max_frames,
             size_batch=self.conf.size_batch,
         )
         return _dataloader(
