@@ -48,6 +48,16 @@ def hmean(x):  # harmonic mean
     return np.mean([1 / e if e != 0 else np.inf for e in x]) ** (-1)
 
 
+def norm_ppf(q, mean=0, std=1):
+    def inv_erf(x):
+        a = 8 * (np.pi - 3) / (3 * np.pi * (4 - np.pi))
+        y = np.log(1 - x**2)
+        z = 2 / (np.pi * a) + y / 2
+        return np.sign(x) * np.sqrt(np.sqrt(z**2 - y / a) - z)
+
+    return mean + std * np.sqrt(2) * inv_erf(2 * q - 1)
+
+
 @fx
 def ema(prev, new, alpha=0.1):
     if prev in (float("inf"), float("-inf")):
@@ -111,45 +121,40 @@ def filterbank(
     )(y)
 
 
-def triplet_contrastive_loss(
-    anchor,
-    positive,
-    negative,
-    margin_min=0.2,
-    margin_max=0.3,
-    alpha=0.5,
-    tau=0.07,
-    num_mining=2,
-    prob_mining=0,
-):
+def contrastiveloss(anchor, positive, negative, tau=1.0):
+    ap = F.cosine_similarity(anchor, positive, dim=-1)
+    an = F.cosine_similarity(anchor, negative, dim=-1)
+    return F.cross_entropy(
+        torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau,
+        torch.zeros(ap.size(0), dtype=torch.long, device=anchor.device),
+    )
+
+
+def tripletloss(anchor, positive, negative, margin_min=0.2, margin_max=0.3):
     def add_margin(x):
         """Add dynamic margins to triplet loss"""
         return x + torch.clamp(x, min=margin_min, max=margin_max)
 
-    cosim = F.cosine_similarity
-    ap = cosim(anchor, positive, dim=-1)
-    an = cosim(anchor, negative, dim=-1)
-    logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau
-    labels = torch.zeros(logits.shape[0], dtype=torch.long, device=logits.device)
-    contrastive = F.cross_entropy(logits, labels)
-
-    # online hard negative mining
-    if rand() < prob_mining:
-        i = hard_mining(anchor, negative, k=num_mining)
-        ap = cosim(anchor.unsqueeze(1), positive.unsqueeze(1), dim=-1)
-        an = cosim(anchor.unsqueeze(1), negative[i], dim=-1)
-    triplet = F.relu(add_margin(an - ap)).mean()
-    return alpha * triplet + (1 - alpha) * contrastive
+    return F.relu(
+        add_margin(
+            F.cosine_similarity(anchor, negative, dim=-1)
+            - F.cosine_similarity(anchor, positive, dim=-1)
+        )
+    ).mean()
 
 
 @torch.no_grad()
-def hard_mining(anchor, negative, k=2):
+def hard_mining(anchor, negative, neg_mining=0.05, mean=0, std=1):
     """Find the indices of the most challenging negatives."""
-    return cf_(
-        snd,
-        ob(_.topk)(k=k, dim=-1),
-        F.cosine_similarity,
-    )(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
+    sim = F.cosine_similarity(anchor, negative, dim=-1)
+    mask = sim > norm_ppf(1 - neg_mining, mean=mean, std=std)
+    while not torch.any(mask).item():
+        neg_mining += 0.05
+        mask = sim > norm_ppf(1 - neg_mining, mean=mean, std=std)
+        if neg_mining > 0.5:
+            mask[sim.argmax(keepdim=True)] = True
+            break
+    return mask
 
 
 @torch.no_grad()

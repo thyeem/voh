@@ -85,10 +85,25 @@ class voh(nn.Module):
                 loss=float("inf"),
                 vloss=float("inf"),
                 minloss=float("inf"),
-                alpha=0.2,
+                pos_mean=float("inf"),
+                pos_std=float("inf"),
+                neg_mean=float("inf"),
+                neg_std=float("inf"),
+                vpos_mean=float("inf"),
+                vpos_std=float("inf"),
+                vneg_mean=float("inf"),
+                vneg_std=float("inf"),
+                triplet=float("inf"),
+                contrastive=float("inf"),
+                vtriplet=float("inf"),
+                vcontrastive=float("inf"),
+                alpha=0.1,
             )
         else:
             self.stat = dmap(stat)
+        self.ema = ema(alpha=self.stat.alpha)
+        self._loss = 0
+        self._vloss = float("inf")
         return self
 
     def set_optim(self, optim=None):
@@ -151,11 +166,6 @@ class voh(nn.Module):
             f"error, output size({self.conf.size_out_enc}) of"
             " the encoder does not match the input size"
             f"({self.conf.size_in_dec}) of the decoder.",
-        )
-        guard(
-            self.conf.num_mining <= self.conf.size_batch,
-            f"error, number of hard negatives ({self.conf.num_mining}) "
-            f"must be less than batch size ({self.conf.size_batch})",
         )
         train and guard(
             self.conf.size_in_enc == self.conf.num_mel_filters,
@@ -273,7 +283,6 @@ class voh(nn.Module):
         dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
         self.update_lr()
-        self._loss = self._vloss = 0
         with dl:
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 self.train()
@@ -286,29 +295,69 @@ class voh(nn.Module):
                     next(dl),
                 )
                 # loss = triplet-loss + contrastive-loss
-                loss = triplet_contrastive_loss(
-                    anchor,
-                    positive,
-                    negative,
-                    margin_min=self.conf.margin_min,
-                    margin_max=self.conf.margin_max,
-                    alpha=self.conf.alpha,
-                    tau=self.conf.tau,
-                    num_mining=self.conf.num_mining,
-                    prob_mining=self.conf.prob_mining,
-                )
+                loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
                 self.optim.step()
 
-                self._loss += loss
+                self._loss += loss.item()
                 if self.on_interval(self.conf.int_val) and not self.on_warmup():
                     self.validate(dl)
                 if self.on_interval(self.conf.size_val):
                     self.log()
                 self.it += 1
         self.checkpoint()
+
+    def get_loss(self, anchor, positive, negative):
+        orig = (anchor, positive, negative)
+        if self.training:  # hard mining when training mode
+            mask = hard_mining(
+                anchor,
+                negative,
+                neg_mining=self.conf.neg_mining,
+                mean=self.stat.neg_mean,
+                std=self.stat.neg_std,
+            )
+            anchor = anchor[mask]
+            positive = positive[mask]
+            negative = negative[mask]
+
+        contrastive = contrastiveloss(
+            anchor,
+            positive,
+            negative,
+            tau=self.conf.tau,
+        )
+        triplet = tripletloss(
+            anchor,
+            positive,
+            negative,
+            margin_min=self.conf.margin_min,
+            margin_max=self.conf.margin_max,
+        )
+        self.update_stat(*orig, triplet, contrastive)
+        return self.conf.alpha * triplet + (1 - self.conf.alpha) * contrastive
+
+    @torch.no_grad()
+    def update_stat(self, anchor, positive, negative, triplet, contrastive):
+        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        an = F.cosine_similarity(anchor, negative, dim=-1)
+        if self.training:
+            self.stat.pos_mean = self.ema(self.stat.pos_mean, ap.mean().item())
+            self.stat.pos_std = self.ema(self.stat.pos_std, ap.std().item())
+            self.stat.neg_mean = self.ema(self.stat.neg_mean, an.mean().item())
+            self.stat.neg_std = self.ema(self.stat.neg_std, an.std().item())
+            self.stat.triplet = self.ema(self.stat.triplet, triplet)
+            self.stat.contrastive = self.ema(self.stat.contrastive, contrastive)
+        else:
+            self.stat.vpos_mean = self.ema(self.stat.vpos_mean, ap.mean().item())
+            self.stat.vpos_std = self.ema(self.stat.vpos_std, ap.std().item())
+            self.stat.vneg_mean = self.ema(self.stat.vneg_mean, an.mean().item())
+            self.stat.vneg_std = self.ema(self.stat.vneg_std, an.std().item())
+            self.stat.vtriplet = self.ema(self.stat.vtriplet, triplet)
+            self.stat.vcontrastive = self.ema(self.stat.vcontrastive, contrastive)
+        return
 
     @torch.no_grad()
     def validate(self, dl):
@@ -320,17 +369,9 @@ class voh(nn.Module):
                 cf_(f_(F.normalize, dim=-1), self),
                 next(dl),
             )
-            self._vloss += triplet_contrastive_loss(
-                anchor,
-                positive,
-                negative,
-                margin_min=self.conf.margin_min,
-                margin_max=self.conf.margin_max,
-                alpha=self.conf.alpha,
-                tau=self.conf.tau,
-            ).item()
+            self._vloss += self.get_loss(anchor, positive, negative).item()
         self._vloss /= self.conf.size_val
-        self.stat.vloss = ema(alpha=self.stat.alpha)(self.stat.vloss, self._vloss)
+        self.stat.vloss = self.ema(self.stat.vloss, self._vloss)
         if self.stat.vloss < self.stat.minloss:
             self.stat.minloss = self.stat.vloss
             self.checkpoint()
@@ -375,18 +416,38 @@ class voh(nn.Module):
         )
 
     def log(self):
-        loss = (self._loss / self.conf.size_val).item()
-        self.stat.loss = ema(alpha=self.stat.alpha)(self.stat.loss, loss)
-        record = [
-            f"{self.it:06d}",
-            f"{self._lr:.8f}",
-            f"{loss:.4f}",
-            f"{self.stat.loss:.4f}",
-            f"{self._vloss:.4f}",
-            f"{self.stat.vloss:.4f} ({self.stat.minloss:.4f})",
-        ]
-        header = ["Step", "lr", "Loss", "Loss(EMA)", "vLoss", "vLoss(EMA)"]
-        print(tabulate([record], header=header, fn=" " * 10 + _))
+        loss = self._loss / self.conf.size_val
+        self.stat.loss = self.ema(self.stat.loss, loss)
+        __log__ = tabulate(
+            [
+                [
+                    f"{self.it:06d}",
+                    f"{self._lr:.8f}",
+                    f"{self.stat.pos_mean:.4f}/{self.stat.pos_std:.4f}",
+                    f"{self.stat.neg_mean:.4f}/{self.stat.neg_std:.4f}",
+                    f"{self.stat.contrastive:.4f}/{self.stat.triplet:.4f}",
+                    f"{loss:.4f} ({self.stat.loss:.4f})",
+                ],
+                [
+                    "-",
+                    "val",
+                    f"{self.stat.vpos_mean:.4f}/{self.stat.vpos_std:.4f}",
+                    f"{self.stat.vneg_mean:.4f}/{self.stat.vneg_std:.4f}",
+                    f"{self.stat.vcontrastive:.4f}/{self.stat.vtriplet:.4f}",
+                    f"{self._vloss:.4f} ({self.stat.vloss:.4f})"
+                    f" >= {self.stat.minloss:.4f}",
+                ],
+            ],
+            header=[
+                "Step",
+                "lr",
+                "Pos mean/std",
+                "Neg mean/std",
+                "Loss C/T",
+                "Loss (EMA) >= MIN",
+            ],
+        )
+        print(__log__)
         self._loss = 0
 
     def save(self, name=None, ckpt=None):
