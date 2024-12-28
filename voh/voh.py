@@ -89,7 +89,7 @@ class voh(nn.Module):
                 neg=(float("inf"), float("inf")),
                 vpos=(float("inf"), float("inf")),
                 vneg=(float("inf"), float("inf")),
-                alpha=0.05,
+                alpha=0.1,
             )
         else:
             self.stat = dmap(stat)
@@ -274,29 +274,22 @@ class voh(nn.Module):
         dl = self.dl()  # dataloader of (training + validation) set
         dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
-        self.update_lr()
         with dl:
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 self.train()
-                if self.on_interval(self.conf.int_sched_lr):
-                    self.update_lr()
-
-                # load triplet -> model-pass -> normalize
+                self.update_lr(sched=True)
+                self.validate(dl, sched=True)
                 anchor, positive, negative = map(
                     cf_(f_(F.normalize, dim=-1), self),
                     next(dl),
-                )
+                )  # triplet -> model-pass -> normalize
                 loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=4.0)
                 self.optim.step()
-
                 self._loss += loss.item()
-                if self.on_interval(self.conf.int_val) and not self.on_warmup():
-                    self.validate(dl)
-                if self.on_interval(self.conf.size_val):
-                    self.log()
+                self.log(sched=True)
                 self.it += 1
         self.checkpoint()
 
@@ -351,7 +344,12 @@ class voh(nn.Module):
         return
 
     @torch.no_grad()
-    def validate(self, dl):
+    def validate(self, dl, sched=False):
+        if sched and (
+            not self.on_interval(self.conf.int_val)
+            or (self.it <= int(self.conf.steps * self.conf.ratio_warmup))
+        ):  # turn off validation on warmup stage
+            return
         self.eval()
         dl.eval()
         self._vloss = 0
@@ -368,7 +366,9 @@ class voh(nn.Module):
             self.checkpoint()
         dl.train()
 
-    def update_lr(self):
+    def update_lr(self, sched=False):
+        if sched and not self.on_interval(self.conf.int_sched_lr):
+            return
         self._lr = (
             sched_lr(
                 self.it,
@@ -406,7 +406,9 @@ class voh(nn.Module):
             num_workers=self.conf.num_workers,
         )
 
-    def log(self):
+    def log(self, sched=False):
+        if sched and not self.on_interval(self.conf.size_val):
+            return
         loss = self._loss / self.conf.size_val
         self.stat.loss = self.ema(self.stat.loss, loss)
         __log__ = tabulate(
@@ -471,6 +473,3 @@ class voh(nn.Module):
 
     def on_interval(self, val):
         return self.it and self.it % val == 0
-
-    def on_warmup(self):
-        return self.it <= int(self.conf.steps * self.conf.ratio_warmup)
