@@ -319,6 +319,7 @@ class voh(nn.Module):
             negative,
             margin=self.conf.margin,
             alpha=self.conf.alpha,
+            tau=self.conf.tau,
         )
 
     @torch.no_grad()

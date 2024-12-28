@@ -121,27 +121,27 @@ def filterbank(
     )(y)
 
 
-def contrastive_loss(anchor, positive, negative, margin=0.2, alpha=0.5):
+def contrastive_loss(anchor, positive, negative, margin=0.2, alpha=0.5, tau=0.1):
     ap = F.cosine_similarity(anchor, positive, dim=-1)
     an = F.cosine_similarity(anchor, negative, dim=-1)
     margin_base = F.relu(margin + an - ap).mean()
 
-    logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1)
-    targets = torch.zeros(ap.size(0), dtype=torch.long, device=anchor.device)
+    logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau
+    targets = torch.zeros(ap.size(0), dtype=torch.long, device=ap.device)
     classfication_base = F.cross_entropy(logits, targets)
     return alpha * margin_base + (1 - alpha) * classfication_base
 
 
 @torch.no_grad()
-def hard_mining(anchor, negative, neg_mining=0.05, mean=0, std=1):
+def hard_mining(anchor, negative, neg_mining=0.05, mean=0, std=1, step=0.02):
     """Find the indices of the most challenging negatives."""
     sim = F.cosine_similarity(anchor, negative, dim=-1)
     mask = sim > norm_ppf(1 - neg_mining, mean=mean, std=std)
     while not torch.any(mask).item():
-        if neg_mining > 0.2:
-            mask[:] = True
+        if neg_mining > 0.5:  # ensure non-zero mask
+            mask[sim.argmax(keepdim=True)] = True
             break
-        neg_mining += 0.05
+        neg_mining += step
         mask = sim > norm_ppf(1 - neg_mining, mean=mean, std=std)
     return mask
 
