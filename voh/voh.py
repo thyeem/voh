@@ -85,19 +85,11 @@ class voh(nn.Module):
                 loss=float("inf"),
                 vloss=float("inf"),
                 minloss=float("inf"),
-                pos_mean=float("inf"),
-                pos_std=float("inf"),
-                neg_mean=float("inf"),
-                neg_std=float("inf"),
-                vpos_mean=float("inf"),
-                vpos_std=float("inf"),
-                vneg_mean=float("inf"),
-                vneg_std=float("inf"),
-                triplet=float("inf"),
-                contrastive=float("inf"),
-                vtriplet=float("inf"),
-                vcontrastive=float("inf"),
-                alpha=0.1,
+                pos=(float("inf"), float("inf")),
+                neg=(float("inf"), float("inf")),
+                vpos=(float("inf"), float("inf")),
+                vneg=(float("inf"), float("inf")),
+                alpha=0.05,
             )
         else:
             self.stat = dmap(stat)
@@ -294,7 +286,6 @@ class voh(nn.Module):
                     cf_(f_(F.normalize, dim=-1), self),
                     next(dl),
                 )
-                # loss = triplet-loss + contrastive-loss
                 loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
@@ -310,53 +301,52 @@ class voh(nn.Module):
         self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
-        orig = (anchor, positive, negative)
+        self.update_stat(anchor, positive, negative)
         if self.training:  # hard mining when training mode
             mask = hard_mining(
                 anchor,
                 negative,
                 neg_mining=self.conf.neg_mining,
-                mean=self.stat.neg_mean,
-                std=self.stat.neg_std,
+                mean=self.stat.neg[0],
+                std=self.stat.neg[1],
             )
             anchor = anchor[mask]
             positive = positive[mask]
             negative = negative[mask]
-
-        contrastive = contrastiveloss(
+        return contrastive_loss(
             anchor,
             positive,
             negative,
-            tau=self.conf.tau,
+            margin=self.conf.margin,
+            alpha=self.conf.alpha,
         )
-        triplet = tripletloss(
-            anchor,
-            positive,
-            negative,
-            margin_min=self.conf.margin_min,
-            margin_max=self.conf.margin_max,
-        )
-        self.update_stat(*orig, triplet, contrastive)
-        return self.conf.alpha * triplet + (1 - self.conf.alpha) * contrastive
 
     @torch.no_grad()
-    def update_stat(self, anchor, positive, negative, triplet, contrastive):
+    def update_stat(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
+        ap_mean = ap.mean().item()
+        ap_std = ap.std().item()
+        an_mean = an.mean().item()
+        an_std = an.std().item()
         if self.training:
-            self.stat.pos_mean = self.ema(self.stat.pos_mean, ap.mean().item())
-            self.stat.pos_std = self.ema(self.stat.pos_std, ap.std().item())
-            self.stat.neg_mean = self.ema(self.stat.neg_mean, an.mean().item())
-            self.stat.neg_std = self.ema(self.stat.neg_std, an.std().item())
-            self.stat.triplet = self.ema(self.stat.triplet, triplet)
-            self.stat.contrastive = self.ema(self.stat.contrastive, contrastive)
+            self.stat.pos = (
+                self.ema(self.stat.pos[0], ap_mean),
+                self.ema(self.stat.pos[1], ap_std),
+            )
+            self.stat.neg = (
+                self.ema(self.stat.neg[0], an_mean),
+                self.ema(self.stat.neg[1], an_std),
+            )
         else:
-            self.stat.vpos_mean = self.ema(self.stat.vpos_mean, ap.mean().item())
-            self.stat.vpos_std = self.ema(self.stat.vpos_std, ap.std().item())
-            self.stat.vneg_mean = self.ema(self.stat.vneg_mean, an.mean().item())
-            self.stat.vneg_std = self.ema(self.stat.vneg_std, an.std().item())
-            self.stat.vtriplet = self.ema(self.stat.vtriplet, triplet)
-            self.stat.vcontrastive = self.ema(self.stat.vcontrastive, contrastive)
+            self.stat.vpos = (
+                self.ema(self.stat.vpos[0], ap_mean),
+                self.ema(self.stat.vpos[1], ap_std),
+            )
+            self.stat.vneg = (
+                self.ema(self.stat.vneg[0], an_mean),
+                self.ema(self.stat.vneg[1], an_std),
+            )
         return
 
     @torch.no_grad()
@@ -423,18 +413,16 @@ class voh(nn.Module):
                 [
                     f"{self.it:06d}",
                     f"{self._lr:.8f}",
-                    f"{self.stat.pos_mean:.4f}/{self.stat.pos_std:.4f}",
-                    f"{self.stat.neg_mean:.4f}/{self.stat.neg_std:.4f}",
-                    f"{self.stat.contrastive:.4f}/{self.stat.triplet:.4f}",
-                    f"{loss:.4f} ({self.stat.loss:.4f})",
+                    f"{self.stat.pos[0]:.4f}/{self.stat.pos[1]:.4f}",
+                    f"{self.stat.neg[0]:.4f}/{self.stat.neg[1]:.4f}",
+                    f"{loss:.4f}({self.stat.loss:.4f})",
                 ],
                 [
                     "-",
                     "val",
-                    f"{self.stat.vpos_mean:.4f}/{self.stat.vpos_std:.4f}",
-                    f"{self.stat.vneg_mean:.4f}/{self.stat.vneg_std:.4f}",
-                    f"{self.stat.vcontrastive:.4f}/{self.stat.vtriplet:.4f}",
-                    f"{self._vloss:.4f} ({self.stat.vloss:.4f})"
+                    f"{self.stat.vpos[0]:.4f}/{self.stat.vpos[1]:.4f}",
+                    f"{self.stat.vneg[0]:.4f}/{self.stat.vneg[1]:.4f}",
+                    f"{self._vloss:.4f}({self.stat.vloss:.4f})"
                     f" >= {self.stat.minloss:.4f}",
                 ],
             ],
@@ -443,8 +431,7 @@ class voh(nn.Module):
                 "lr",
                 "Pos mean/std",
                 "Neg mean/std",
-                "Loss C/T",
-                "Loss (EMA) >= MIN",
+                "Loss(EMA) >= MIN",
             ],
         )
         print(__log__)

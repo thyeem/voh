@@ -121,26 +121,15 @@ def filterbank(
     )(y)
 
 
-def contrastiveloss(anchor, positive, negative, tau=1.0):
+def contrastive_loss(anchor, positive, negative, margin=0.2, alpha=0.5):
     ap = F.cosine_similarity(anchor, positive, dim=-1)
     an = F.cosine_similarity(anchor, negative, dim=-1)
-    return F.cross_entropy(
-        torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau,
-        torch.zeros(ap.size(0), dtype=torch.long, device=anchor.device),
-    )
+    margin_base = F.relu(margin + an - ap).mean()
 
-
-def tripletloss(anchor, positive, negative, margin_min=0.2, margin_max=0.3):
-    def add_margin(x):
-        """Add dynamic margins to triplet loss"""
-        return x + torch.clamp(x, min=margin_min, max=margin_max)
-
-    return F.relu(
-        add_margin(
-            F.cosine_similarity(anchor, negative, dim=-1)
-            - F.cosine_similarity(anchor, positive, dim=-1)
-        )
-    ).mean()
+    logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1)
+    targets = torch.zeros(ap.size(0), dtype=torch.long, device=anchor.device)
+    classfication_base = F.cross_entropy(logits, targets)
+    return alpha * margin_base + (1 - alpha) * classfication_base
 
 
 @torch.no_grad()
@@ -149,11 +138,11 @@ def hard_mining(anchor, negative, neg_mining=0.05, mean=0, std=1):
     sim = F.cosine_similarity(anchor, negative, dim=-1)
     mask = sim > norm_ppf(1 - neg_mining, mean=mean, std=std)
     while not torch.any(mask).item():
+        if neg_mining > 0.2:
+            mask[:] = True
+            break
         neg_mining += 0.05
         mask = sim > norm_ppf(1 - neg_mining, mean=mean, std=std)
-        if neg_mining > 0.5:
-            mask[sim.argmax(keepdim=True)] = True
-            break
     return mask
 
 
@@ -573,7 +562,7 @@ def tasting(md, db, mono=False, size=10):
     cosims = []
     for o in randpair(db, mono=mono, size=size):
         cosim = md.cosim(*o)
-        print(f"{cosim:.4f}")
+        print(f"{cosim:.4f} {speaker_id(o[0]):>16} {speaker_id(o[1]):>16}")
         cosims.append(cosim)
     bins = [-1, 0.6, 0.7, 0.8, 0.9, 1.01]
     hist = Counter(bisect(bins, cosim) for cosim in cosims)
