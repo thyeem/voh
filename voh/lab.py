@@ -1,6 +1,9 @@
 import math
 import re
+from bisect import bisect
+from collections import Counter
 
+import torch
 from foc import *
 from ouch import *
 from sklearn.metrics import auc
@@ -463,3 +466,28 @@ def plot_curves(fs, xr=[0.0, 1.0], yr=[0.0, 1.02]):
         plt.legend(loc="lower right")
         plt.grid(True)
         plt.show()
+
+
+@torch.no_grad()
+def tasting(model, pairs):
+    md = voh.load(model)
+    md.eval()
+    cosims = []
+    for a, b in pairs:
+        cosim = md.cosim(a, b)
+        print(
+            f"{cosim:.4f} {speaker_id(a):>16} {speaker_id(b):>16}",
+            end="\r",
+            flush=True,
+        )
+        cosims.append(cosim)
+    bins = [0.6, 0.7, 0.8, 0.9, 1.01]
+    hist = Counter(bisect(bins, cosim) for cosim in cosims)
+    pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
+    cdf = scanl1(op.add, pdf)
+    data = [
+        [f"{x:.4f}" for x in pdf] + [f"{np.mean(cosims):.4f}"],
+        [f"{x:.4f}" for x in cdf] + [f"{np.std(cosims):.4f}"],
+    ]
+    header = ["<0.6", "<0.7", "<0.8", "<0.9", "<1.0", "mean/std"]
+    print(tabulate(data, header=header))

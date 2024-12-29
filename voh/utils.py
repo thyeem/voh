@@ -4,8 +4,6 @@ import math
 import os
 import re
 import wave
-from bisect import bisect
-from collections import Counter
 from functools import lru_cache, partial
 
 import librosa
@@ -15,6 +13,7 @@ import soundfile as sf
 import torch
 from foc import *
 from ouch import *
+from ouch import _ns_iterp
 from pytubefix import YouTube
 from scipy.signal import butter, fftconvolve, sosfilt
 from torch.nn import functional as F
@@ -56,6 +55,36 @@ def norm_ppf(q, mean=0, std=1):
         return np.sign(x) * np.sqrt(np.sqrt(z**2 - y / a) - z)
 
     return mean + std * np.sqrt(2) * inv_erf(2 * q - 1)
+
+
+class dataq:
+    def __init__(self, k=1000):
+        self.k = k
+        self.data = deque(maxlen=k)
+
+    def update(self, value):
+        if _ns_iterp(value):
+            self.data.extend(value)
+        else:
+            self.data.append(v)
+
+    @property
+    def median(self):
+        if not self.data:
+            return
+        return np.median(self.data)
+
+    @property
+    def mad(self):
+        if not self.data:
+            return
+        median = self.median
+        return np.median(np.abs(np.array(self.data) - median))
+
+    def percentile(self, q):
+        if not self.data:
+            return
+        return np.percentile(self.data, q)
 
 
 @fx
@@ -556,23 +585,6 @@ def triplet(db, size=1):
     anchor, negative = r[:size], r[size:]
     positive = [nodup(db, a) for a in anchor]
     return anchor, positive, negative
-
-
-def tasting(md, db, mono=False, size=10):
-    cosims = []
-    for o in randpair(db, mono=mono, size=size):
-        cosim = md.cosim(*o)
-        print(f"{cosim:.4f} {speaker_id(o[0]):>16} {speaker_id(o[1]):>16}")
-        cosims.append(cosim)
-    bins = [-1, 0.6, 0.7, 0.8, 0.9, 1.01]
-    hist = Counter(bisect(bins, cosim) for cosim in cosims)
-    print(f"mean: {np.mean(cosims):.4f}")
-    print(
-        tabulate(
-            [[f"{(100*hist.get(i, 0)/size):.1f}%" for i in range(1, len(bins))]],
-            header=["<0.6", "0.6x", "0.7x", "0.8x", "0.9x"],
-        )
-    )
 
 
 def get_pre_trained():
