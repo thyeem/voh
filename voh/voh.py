@@ -316,13 +316,13 @@ class voh(nn.Module):
         """Find the indices of the most challenging negatives."""
         sim = F.cosine_similarity(anchor, negative, dim=-1)
         threshold = 1 - self.conf.neg_mining
-        mask = sim > self.dq.neq.percentile(100 * threshold)
+        mask = sim > self.dq.neg.percentile(100 * threshold)
         while not torch.any(mask).item():
-            if neg_mining > 0.5:  # ensure non-zero mask
+            if threshold < 0.5:  # ensure non-zero mask
                 mask[sim.argmax(keepdim=True)] = True
                 break
-            neg_mining += 0.05
-            mask = sim > self.dq.neq.percentile(100 * threshold)
+            threshold -= 0.02
+            mask = sim > self.dq.neg.percentile(100 * threshold)
         return mask
 
     @torch.no_grad()
@@ -409,24 +409,24 @@ class voh(nn.Module):
                 [
                     f"{self.it:06d}",
                     f"{self._lr:.8f}",
-                    f"{self.stat.pos[0]:.4f}/{self.stat.pos[1]:.4f}",
-                    f"{self.stat.neg[0]:.4f}/{self.stat.neg[1]:.4f}",
+                    f"{self.dq.pos.median:.4f}/{self.dq.pos.mad:.4f}",
+                    f"{self.dq.neg.median:.4f}/{self.dq.neg.mad:.4f}",
                     f"{loss:.4f}({self.stat.loss:.4f})",
                 ],
                 [
                     "-",
                     "val",
-                    f"{self.stat.vpos[0]:.4f}/{self.stat.vpos[1]:.4f}",
-                    f"{self.stat.vneg[0]:.4f}/{self.stat.vneg[1]:.4f}",
+                    f"{self.dq.vpos.median:.4f}/{self.dq.vpos.mad:.4f}",
+                    f"{self.dq.vneg.median:.4f}/{self.dq.vneg.mad:.4f}",
                     f"{self._vloss:.4f}({self.stat.vloss:.4f})"
                     f" >= {self.stat.minloss:.4f}",
                 ],
             ],
             header=[
                 "Step",
-                "lr",
-                "Pos mean/std",
-                "Neg mean/std",
+                "LR",
+                "P Median/MAD",
+                "N Median/MAD",
                 "Loss(EMA) >= MIN",
             ],
         )

@@ -64,28 +64,28 @@ class dataq:
         if data:
             self.update(data)
 
-    def update(self, value):
-        if _ns_iterp(value):
-            self.data.extend(value)
+    def update(self, v):
+        if _ns_iterp(v):
+            self.data.extend(v)
         else:
             self.data.append(v)
 
     @property
     def median(self):
         if not self.data:
-            return
+            return float("nan")
         return np.median(self.data)
 
     @property
     def mad(self):
         if not self.data:
-            return
+            return float("nan")
         median = self.median
         return np.median(np.abs(np.array(self.data) - median))
 
     def percentile(self, q):
         if not self.data:
-            return
+            return float("nan")
         return np.percentile(self.data, q)
 
 
