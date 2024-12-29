@@ -85,14 +85,16 @@ class voh(nn.Module):
                 loss=float("inf"),
                 vloss=float("inf"),
                 minloss=float("inf"),
-                pos=(float("inf"), float("inf")),
-                neg=(float("inf"), float("inf")),
-                vpos=(float("inf"), float("inf")),
-                vneg=(float("inf"), float("inf")),
                 alpha=0.1,
             )
         else:
             self.stat = dmap(stat)
+        self.dq = dmap(
+            pos=dataq(1000),
+            neg=dataq(1000),
+            vpos=dataq(1000),
+            vneg=dataq(1000),
+        )
         self.ema = ema(alpha=self.stat.alpha)
         self._loss = 0
         self._vloss = float("inf")
@@ -296,13 +298,7 @@ class voh(nn.Module):
     def get_loss(self, anchor, positive, negative):
         self.update_stat(anchor, positive, negative)
         if self.training:  # hard mining when training mode
-            mask = hard_mining(
-                anchor,
-                negative,
-                neg_mining=self.conf.neg_mining,
-                mean=self.stat.neg[0],
-                std=self.stat.neg[1],
-            )
+            mask = self.mine(anchor, negative)
             anchor = anchor[mask]
             positive = positive[mask]
             negative = negative[mask]
@@ -316,32 +312,29 @@ class voh(nn.Module):
         )
 
     @torch.no_grad()
+    def mine(self, anchor, negative):
+        """Find the indices of the most challenging negatives."""
+        sim = F.cosine_similarity(anchor, negative, dim=-1)
+        threshold = 1 - self.conf.neg_mining
+        mask = sim > self.dq.neq.percentile(100 * threshold)
+        while not torch.any(mask).item():
+            if neg_mining > 0.5:  # ensure non-zero mask
+                mask[sim.argmax(keepdim=True)] = True
+                break
+            neg_mining += 0.05
+            mask = sim > self.dq.neq.percentile(100 * threshold)
+        return mask
+
+    @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
-        ap = F.cosine_similarity(anchor, positive, dim=-1)
-        an = F.cosine_similarity(anchor, negative, dim=-1)
-        ap_mean = ap.mean().item()
-        ap_std = ap.std().item()
-        an_mean = an.mean().item()
-        an_std = an.std().item()
+        ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
+        an = F.cosine_similarity(anchor, negative, dim=-1).tolist()
         if self.training:
-            self.stat.pos = (
-                self.ema(self.stat.pos[0], ap_mean),
-                self.ema(self.stat.pos[1], ap_std),
-            )
-            self.stat.neg = (
-                self.ema(self.stat.neg[0], an_mean),
-                self.ema(self.stat.neg[1], an_std),
-            )
+            self.dq.pos.update(ap)
+            self.dq.neg.update(an)
         else:
-            self.stat.vpos = (
-                self.ema(self.stat.vpos[0], ap_mean),
-                self.ema(self.stat.vpos[1], ap_std),
-            )
-            self.stat.vneg = (
-                self.ema(self.stat.vneg[0], an_mean),
-                self.ema(self.stat.vneg[1], an_std),
-            )
-        return
+            self.dq.vpos.update(ap)
+            self.dq.vneg.update(an)
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
