@@ -47,6 +47,7 @@ conf = dmap(
     num_workers=(META, 2),
     num_aug=(META, 3),
     prob_aug=(META, 0.3),
+    size_dq=(META, 4000),
 )
 
 modelpath = f"{dirname(__file__)}/../o"

@@ -89,16 +89,16 @@ class voh(nn.Module):
             )
         else:
             self.stat = dmap(stat)
+        size_dq = self.conf.size_dq
         self.dq = dmap(
-            pos=dataq(2000),
-            neg=dataq(2000),
-            vpos=dataq(2000),
-            vneg=dataq(2000),
-            mineq=dataq(2000),
+            pos=dataQ(size_dq),
+            neg=dataQ(size_dq),
+            vpos=dataQ(size_dq),
+            vneg=dataQ(size_dq),
+            mineq=dataQ(size_dq),
         )
+        self.dq.mineq.update(1 - self.conf.neg_mining)
         self.ema = ema(alpha=self.stat.alpha)
-        self._loss = 0
-        self._vloss = float("inf")
         return self
 
     def set_optim(self, optim=None):
@@ -273,11 +273,23 @@ class voh(nn.Module):
     # -----------
     # Training
     # -----------
+    @torch.no_grad()
+    def prepare(self, dl):
+        dl.train()
+        if not self.dq.neg.data:
+            self.train()
+            size = self.conf.size_dq // (self.conf.size_batch**2)
+            for _ in tracker(range(size), "preparing"):
+                anchor, positive, negative = map(self, next(dl))
+                self.update_stat(anchor, positive, negative)
+        self._loss = 0
+        self._vloss = float("inf")
+
     def get_trained(self):
         dl = self.dl()  # dataloader of (training + validation) set
-        dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
         with dl:
+            self.prepare(dl)
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 self.train()
                 self.update_lr(sched=True)
@@ -287,7 +299,7 @@ class voh(nn.Module):
                 loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=4.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
                 self.optim.step()
                 self._loss += loss.item()
                 self.log(sched=True)
@@ -296,36 +308,53 @@ class voh(nn.Module):
 
     def get_loss(self, anchor, positive, negative):
         if self.training:  # hard mining when training mode
-            mask = self.mine(anchor, negative)
-            anchor = anchor[mask]
-            positive = positive[mask]
-            negative = negative[mask]
-        return contrastive_loss(
-            anchor,
-            positive,
-            negative,
-            margin=self.conf.margin,
-        )
+            anchor, positive, negative = self.mine(anchor, positive, negative)
+        return F.relu(
+            self.conf.margin
+            + F.cosine_similarity(anchor, negative, dim=-1)
+            - F.cosine_similarity(anchor, positive, dim=-1)
+        ).mean()
 
     @torch.no_grad()
-    def mine(self, anchor, negative):
-        """Find the indices of the most challenging negatives."""
-        sim = F.cosine_similarity(anchor, negative, dim=-1)
+    def mine(self, anchor, positive, negative):
+        """Find the the most challenging triplet based on statistics"""
+
+        def get_crossed(x, y):
+            return F.cosine_similarity(x.unsqueeze(1), y.unsqueeze(0), dim=-1)
+
+        def indices(S, threshold):
+            return (S > self.dq.neg.percentile(100 * threshold)).nonzero()
+
+        def cat(x, i, y, j):
+            return torch.cat([x[i], y[j]])
+
         threshold = 1 - self.conf.neg_mining
-        mask = sim > self.dq.neg.percentile(100 * threshold)
-        while not torch.any(mask).item():
-            if threshold < 0.5:  # ensure non-zero mask
-                mask[sim.argmax(keepdim=True)] = True
+        X = get_crossed(anchor, negative)
+        Y = get_crossed(positive, negative)
+        i = indices(X, threshold)
+        j = indices(Y, threshold)
+        while not (len(i) or len(j)):
+            if threshold < 0.8:
+                i = (X == torch.max(X)).nonzero()
+                j = (Y == torch.max(Y)).nonzero()
                 break
-            threshold -= 0.02
-            mask = sim > self.dq.neg.percentile(100 * threshold)
-        self.dq.mineq.update(threshold)
-        return mask
+            threshold -= 0.01
+            i = indices(X, threshold)
+            j = indices(Y, threshold)
+        return (
+            cat(anchor, i[:, 0], positive, j[:, 0]),
+            cat(positive, i[:, 0], anchor, j[:, 0]),
+            cat(negative, i[:, 1], negative, j[:, 1]),
+        )
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
-        an = F.cosine_similarity(anchor, negative, dim=-1).tolist()
+        an = F.cosine_similarity(
+            anchor.unsqueeze(1),
+            negative.unsqueeze(0),
+            dim=-1,
+        ).tolist()
         if self.training:
             self.dq.pos.update(ap)
             self.dq.neg.update(an)

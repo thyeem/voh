@@ -57,7 +57,7 @@ def norm_ppf(q, mean=0, std=1):
     return mean + std * np.sqrt(2) * inv_erf(2 * q - 1)
 
 
-class dataq:
+class dataQ:
     def __init__(self, k=1000, data=None):
         self.k = k
         self.data = deque(maxlen=k)
@@ -150,12 +150,6 @@ def filterbank(
         torch.from_numpy,
         _ + 1e-10,
     )(y)
-
-
-def contrastive_loss(anchor, positive, negative, margin=0.2):
-    ap = F.cosine_similarity(anchor, positive, dim=-1)
-    an = F.cosine_similarity(anchor, negative, dim=-1)
-    return F.relu(margin + an - ap).mean()
 
 
 @torch.no_grad()
