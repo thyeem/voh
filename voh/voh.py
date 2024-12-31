@@ -90,10 +90,11 @@ class voh(nn.Module):
         else:
             self.stat = dmap(stat)
         self.dq = dmap(
-            pos=dataq(1000),
-            neg=dataq(1000),
-            vpos=dataq(1000),
-            vneg=dataq(1000),
+            pos=dataq(2000),
+            neg=dataq(2000),
+            vpos=dataq(2000),
+            vneg=dataq(2000),
+            mineq=dataq(2000),
         )
         self.ema = ema(alpha=self.stat.alpha)
         self._loss = 0
@@ -281,10 +282,8 @@ class voh(nn.Module):
                 self.train()
                 self.update_lr(sched=True)
                 self.validate(dl, sched=True)
-                anchor, positive, negative = map(
-                    cf_(f_(F.normalize, dim=-1), self),
-                    next(dl),
-                )  # triplet -> model-pass -> normalize
+                anchor, positive, negative = map(self, next(dl))
+                self.update_stat(anchor, positive, negative)
                 loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
@@ -296,7 +295,6 @@ class voh(nn.Module):
         self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
-        self.update_stat(anchor, positive, negative)
         if self.training:  # hard mining when training mode
             mask = self.mine(anchor, negative)
             anchor = anchor[mask]
@@ -307,8 +305,6 @@ class voh(nn.Module):
             positive,
             negative,
             margin=self.conf.margin,
-            alpha=self.conf.alpha,
-            tau=self.conf.tau,
         )
 
     @torch.no_grad()
@@ -323,6 +319,7 @@ class voh(nn.Module):
                 break
             threshold -= 0.02
             mask = sim > self.dq.neg.percentile(100 * threshold)
+        self.dq.mineq.update(threshold)
         return mask
 
     @torch.no_grad()
@@ -347,10 +344,8 @@ class voh(nn.Module):
         dl.eval()
         self._vloss = 0
         for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = map(
-                cf_(f_(F.normalize, dim=-1), self),
-                next(dl),
-            )
+            anchor, positive, negative = map(self, next(dl))
+            self.update_stat(anchor, positive, negative)
             self._vloss += self.get_loss(anchor, positive, negative).item()
         self._vloss /= self.conf.size_val
         self.stat.vloss = self.ema(self.stat.vloss, self._vloss)
@@ -409,13 +404,16 @@ class voh(nn.Module):
                 [
                     f"{self.it:06d}",
                     f"{self._lr:.8f}",
+                    f"{self.dq.mineq.median:.2f}"
+                    f"({self.dq.neg.percentile(100*self.dq.mineq.median):.4f})",
                     f"{self.dq.pos.median:.4f}/{self.dq.pos.mad:.4f}",
                     f"{self.dq.neg.median:.4f}/{self.dq.neg.mad:.4f}",
                     f"{loss:.4f}({self.stat.loss:.4f})",
                 ],
                 [
-                    "-",
                     "val",
+                    "-",
+                    "-",
                     f"{self.dq.vpos.median:.4f}/{self.dq.vpos.mad:.4f}",
                     f"{self.dq.vneg.median:.4f}/{self.dq.vneg.mad:.4f}",
                     f"{self._vloss:.4f}({self.stat.vloss:.4f})"
@@ -425,6 +423,7 @@ class voh(nn.Module):
             header=[
                 "Step",
                 "LR",
+                "Mine-Q(V)",
                 "P Median/MAD",
                 "N Median/MAD",
                 "Loss(EMA) >= MIN",

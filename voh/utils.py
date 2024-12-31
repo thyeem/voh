@@ -152,15 +152,10 @@ def filterbank(
     )(y)
 
 
-def contrastive_loss(anchor, positive, negative, margin=0.2, alpha=0.5, tau=0.1):
+def contrastive_loss(anchor, positive, negative, margin=0.2):
     ap = F.cosine_similarity(anchor, positive, dim=-1)
     an = F.cosine_similarity(anchor, negative, dim=-1)
-    margin_base = F.relu(margin + an - ap).mean()
-
-    logits = torch.cat([ap.unsqueeze(-1), an.unsqueeze(-1)], dim=-1) / tau
-    targets = torch.zeros(ap.size(0), dtype=torch.long, device=ap.device)
-    classfication_base = F.cross_entropy(logits, targets)
-    return alpha * margin_base + (1 - alpha) * classfication_base
+    return F.relu(margin + an - ap).mean()
 
 
 @torch.no_grad()
