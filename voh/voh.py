@@ -315,10 +315,10 @@ class voh(nn.Module):
             - F.cosine_similarity(anchor, positive, dim=-1)
         ).mean()
 
-    @torch.no_grad()
     def mine(self, anchor, positive, negative):
         """Find the the most challenging triplet based on statistics"""
 
+        @torch.no_grad()
         def get_crossed(x, y):
             return F.cosine_similarity(x.unsqueeze(1), y.unsqueeze(0), dim=-1)
 
