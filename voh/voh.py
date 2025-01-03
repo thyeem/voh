@@ -82,22 +82,24 @@ class voh(nn.Module):
     def set_stat(self, stat=None):
         if self.conf.reset or stat is None:
             self.stat = dmap(
-                loss=float("inf"),
-                vloss=float("inf"),
+                loss=dmap(t=float("inf"), v=float("inf")),
                 minloss=float("inf"),
                 alpha=0.1,
             )
         else:
             self.stat = dmap(stat)
-        size_dq = self.conf.size_dq
+        size_p = self.conf.size_val * self.conf.size_batch
+        size_n = self.conf.size_val * self.conf.size_batch**2
         self.dq = dmap(
-            pos=dataQ(size_dq),
-            neg=dataQ(size_dq),
-            vpos=dataQ(size_dq),
-            vneg=dataQ(size_dq),
-            mineq=dataQ(size_dq),
+            pos=dmap(t=dataQ(size_p), v=dataQ(size_p)),
+            neg=dmap(t=dataQ(size_p), v=dataQ(size_p)),
+            mine=dmap(
+                neg=dataQ(self.conf.size_mineq),
+                th=dataQ(self.conf.size_mineq),
+            ),
+            loss=dmap(t=dataQ(self.conf.size_val), v=dataQ(self.conf.size_val)),
         )
-        self.dq.mineq.update(1 - self.conf.neg_mining)
+        self.dq.mine.th.update(1 - self.conf.neg_mining)
         self.ema = ema(alpha=self.stat.alpha)
         return self
 
@@ -225,8 +227,8 @@ class voh(nn.Module):
                 decoder=self.decoder,
             )
         o = dmap(**kind_conf(self.conf, kind=kind)) | dmap(
-            loss=f"{self.stat.loss:.4f}",
-            val_loss=f"{self.stat.vloss:.4f}",
+            loss=f"{self.stat.loss.t:.4f}",
+            val_loss=f"{self.stat.loss.v:.4f}",
             it=(
                 f"{self.it}  "
                 f"({100 * self.it / (self.conf.epochs * self.conf.steps):.2f}"
@@ -276,14 +278,12 @@ class voh(nn.Module):
     @torch.no_grad()
     def prepare(self, dl):
         dl.train()
-        if not self.dq.neg.data:
+        if not self.dq.mine.neg.data:
             self.train()
-            size = self.conf.size_dq // (self.conf.size_batch**2)
+            size = self.dq.mine.neg.data.maxlen // (self.conf.size_batch**2)
             for _ in tracker(range(size), "preparing"):
                 anchor, positive, negative = map(self, next(dl))
                 self.update_stat(anchor, positive, negative)
-        self._loss = 0
-        self._vloss = float("inf")
 
     def get_trained(self):
         dl = self.dl()  # dataloader of (training + validation) set
@@ -301,51 +301,46 @@ class voh(nn.Module):
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
                 self.optim.step()
-                self._loss += loss.item()
+                self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
                 self.it += 1
         self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
         if self.training:  # hard mining when training mode
-            anchor, positive, negative = self.mine(anchor, positive, negative)
-        return F.relu(
-            self.conf.margin
-            + F.cosine_similarity(anchor, negative, dim=-1)
+            i, j = self.mine(anchor, negative)
+            anchor = anchor[i]
+            positive = positive[i]
+            negative = negative[j]
+        return (
+            1
             - F.cosine_similarity(anchor, positive, dim=-1)
+            + np.pi
+            - torch.acos(F.cosine_similarity(anchor, negative, dim=-1))
         ).mean()
 
-    def mine(self, anchor, positive, negative):
-        """Find the the most challenging triplet based on statistics"""
+    @torch.no_grad()
+    def mine(self, anchor, negative):
+        """Find the indices of the most challenging negatives."""
 
-        @torch.no_grad()
-        def get_crossed(x, y):
-            return F.cosine_similarity(x.unsqueeze(1), y.unsqueeze(0), dim=-1)
+        def cutval(threshold):
+            return min(0.8, self.dq.mine.neg.percentile(100 * threshold))
 
-        def indices(S, threshold):
-            return (S > self.dq.neg.percentile(100 * threshold)).nonzero()
-
-        def cat(x, i, y, j):
-            return torch.cat([x[i], y[j]])
-
+        M = F.cosine_similarity(
+            anchor.unsqueeze(1),
+            negative.unsqueeze(0),
+            dim=-1,
+        )
         threshold = 1 - self.conf.neg_mining
-        X = get_crossed(anchor, negative)
-        Y = get_crossed(positive, negative)
-        i = indices(X, threshold)
-        j = indices(Y, threshold)
-        while not (len(i) or len(j)):
-            if threshold < 0.8:
-                i = (X == torch.max(X)).nonzero()
-                j = (Y == torch.max(Y)).nonzero()
+        iq = (M > cutval(threshold)).nonzero()
+        while not len(iq):
+            if threshold <= 0.8:  # ensure non-zero mask
+                iq = (M == torch.max(M)).nonzero()
                 break
             threshold -= 0.01
-            i = indices(X, threshold)
-            j = indices(Y, threshold)
-        return (
-            cat(anchor, i[:, 0], positive, j[:, 0]),
-            cat(positive, i[:, 0], anchor, j[:, 0]),
-            cat(negative, i[:, 1], negative, j[:, 1]),
-        )
+            iq = (M > cutval(threshold)).nonzero()
+        self.dq.mine.th.update(threshold)
+        return iq[:, 0], iq[:, 1]
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
@@ -356,11 +351,12 @@ class voh(nn.Module):
             dim=-1,
         ).tolist()
         if self.training:
-            self.dq.pos.update(ap)
-            self.dq.neg.update(an)
+            self.dq.pos.t.update(ap)
+            self.dq.neg.t.update(an)
+            self.dq.mine.neg.update(an)
         else:
-            self.dq.vpos.update(ap)
-            self.dq.vneg.update(an)
+            self.dq.pos.v.update(ap)
+            self.dq.neg.v.update(an)
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
@@ -371,15 +367,13 @@ class voh(nn.Module):
             return
         self.eval()
         dl.eval()
-        self._vloss = 0
         for _ in tracker(range(self.conf.size_val), "validation"):
             anchor, positive, negative = map(self, next(dl))
             self.update_stat(anchor, positive, negative)
-            self._vloss += self.get_loss(anchor, positive, negative).item()
-        self._vloss /= self.conf.size_val
-        self.stat.vloss = self.ema(self.stat.vloss, self._vloss)
-        if self.stat.vloss < self.stat.minloss:
-            self.stat.minloss = self.stat.vloss
+            self.dq.loss.v.update(self.get_loss(anchor, positive, negative).item())
+        self.stat.loss.v = self.ema(self.stat.loss.v, self.dq.loss.v.median)
+        if self.stat.loss.v < self.stat.minloss:
+            self.stat.minloss = self.stat.loss.v
             self.checkpoint()
         dl.train()
 
@@ -426,40 +420,38 @@ class voh(nn.Module):
     def log(self, sched=False):
         if sched and not self.on_interval(self.conf.size_val):
             return
-        loss = self._loss / self.conf.size_val
-        self.stat.loss = self.ema(self.stat.loss, loss)
+        self.stat.loss.t = self.ema(self.stat.loss.t, self.dq.loss.t.median)
+        cutval = self.dq.mine.neg.percentile(100 * self.dq.mine.th.median)
         __log__ = tabulate(
             [
                 [
                     f"{self.it:06d}",
                     f"{self._lr:.8f}",
-                    f"{self.dq.mineq.median:.2f}"
-                    f"({self.dq.neg.percentile(100*self.dq.mineq.median):.4f})",
-                    f"{self.dq.pos.median:.4f}/{self.dq.pos.mad:.4f}",
-                    f"{self.dq.neg.median:.4f}/{self.dq.neg.mad:.4f}",
-                    f"{loss:.4f}({self.stat.loss:.4f})",
+                    f"{self.dq.mine.th.median:.2f}({cutval:.4f})",
+                    f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
+                    f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
+                    f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
                 ],
                 [
                     "val",
                     "-",
                     "-",
-                    f"{self.dq.vpos.median:.4f}/{self.dq.vpos.mad:.4f}",
-                    f"{self.dq.vneg.median:.4f}/{self.dq.vneg.mad:.4f}",
-                    f"{self._vloss:.4f}({self.stat.vloss:.4f})"
+                    f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
+                    f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
+                    f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
                     f" >= {self.stat.minloss:.4f}",
                 ],
             ],
             header=[
                 "Step",
                 "LR",
-                "Mine-Q(V)",
+                "TH(Value)",
                 "P Median/MAD",
                 "N Median/MAD",
                 "Loss(EMA) >= MIN",
             ],
         )
         print(__log__)
-        self._loss = 0
 
     def save(self, name=None, ckpt=None):
         name = name or self.name
@@ -486,7 +478,7 @@ class voh(nn.Module):
 
     def checkpoint(self, retain=24):
         self.save(
-            ckpt=f"-v{self.stat.vloss:.3f}-t{self.stat.loss:.3f}-{self.it:06d}",
+            ckpt=f"-v{self.stat.loss.v:.3f}-t{self.stat.loss.t:.3f}-{self.it:06d}",
         )
         path = f"{path_model(self.name)}.ckpt"
         for f in shell(f"find {path} -type f | sort -V")[retain:]:

@@ -486,7 +486,7 @@ def tasting(model, pairs):
     pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
     cdf = scanl1(op.add, pdf)
     median = np.median(cosims)
-    mad = np.median(np.abs(np.array(cosim) - median))
+    mad = np.median(np.abs(np.array(cosims) - median))
     data = [
         [f"{x:.4f}" for x in pdf] + [f"{median:.4f}"],
         [f"{x:.4f}" for x in cdf] + [f"{mad:.4f}"],

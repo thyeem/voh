@@ -83,6 +83,18 @@ class dataQ:
         median = self.median
         return np.median(np.abs(np.array(self.data) - median))
 
+    @property
+    def mean(self):
+        if not self.data:
+            return float("nan")
+        return np.mean(self.data)
+
+    @property
+    def std(self):
+        if not self.data:
+            return float("nan")
+        return np.std(self.data)
+
     def percentile(self, q):
         if not self.data:
             return float("nan")
