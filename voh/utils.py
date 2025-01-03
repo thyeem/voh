@@ -366,13 +366,17 @@ def segment_wav(wav, dur=4, min_dur=2.5, keep_orig=False, eps=0.1):
 
 
 @fx
-def reduce_data(path, cutoff=300, workers=None):
+def reduce_data(path, cutoff=300, workers=None, sr=None):
     """Reduce the number of wav files for each speaker."""
     for speaker in tracker(ls(path), "reduction"):
         wavs = ls(speaker, grep=r".wav$")
         if len(wavs) > cutoff:
             wavs = shuffle(wavs)[cutoff:]
             parmap(os.remove, wavs, workers=workers)
+        if sr:
+            wavs = ls(speaker, grep=r".wav$")
+            for wav in tracker(wavs, "resample"):
+                savewav(wav, resample(readwav(wav), sr=sr))
 
 
 def create_mmap(f="data.db", out="mmap", sr=16000):
