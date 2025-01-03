@@ -422,36 +422,38 @@ class voh(nn.Module):
             return
         self.stat.loss.t = self.ema(self.stat.loss.t, self.dq.loss.t.median)
         cutval = self.dq.mine.neg.percentile(100 * self.dq.mine.th.median)
-        __log__ = tabulate(
+        log = [
+            (
+                [
+                    "Step",
+                    "LR",
+                    "TH(Value)",
+                    "P Median/MAD",
+                    "N Median/MAD",
+                    "Loss(EMA) >= MIN",
+                ]
+                if self.on_interval(5 * self.conf.size_val)
+                else []
+            ),
             [
-                [
-                    f"{self.it:06d}",
-                    f"{self._lr:.8f}",
-                    f"{self.dq.mine.th.median:.2f}({cutval:.4f})",
-                    f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
-                    f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
-                    f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
-                ],
-                [
-                    "val",
-                    "-",
-                    "-",
-                    f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
-                    f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
-                    f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
-                    f" >= {self.stat.minloss:.4f}",
-                ],
+                f"{self.it:06d}",
+                f"{self._lr:.8f}",
+                f"{self.dq.mine.th.median:.2f}({cutval:.4f})",
+                f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
+                f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
+                f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
             ],
-            header=[
-                "Step",
-                "LR",
-                "TH(Value)",
-                "P Median/MAD",
-                "N Median/MAD",
-                "Loss(EMA) >= MIN",
+            [
+                "val",
+                "-",
+                "-",
+                f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
+                f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
+                f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
+                f" >= {self.stat.minloss:.4f}",
             ],
-        )
-        print(__log__)
+        ]
+        print(tabulate(filterl(bool, log), nohead=True))
 
     def save(self, name=None, ckpt=None):
         name = name or self.name
@@ -463,7 +465,7 @@ class voh(nn.Module):
             dict(
                 name=name,
                 it=self.it,
-                stat=dict(self.stat),
+                stat=deepdict(self.stat),
                 optim=self.optim.state_dict() if self.optim else None,
                 conf=dict(self.conf) | dict(reset=False),
                 model=self.state_dict(),

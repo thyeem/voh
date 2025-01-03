@@ -487,9 +487,14 @@ def tasting(model, pairs):
     cdf = scanl1(op.add, pdf)
     median = np.median(cosims)
     mad = np.median(np.abs(np.array(cosims) - median))
-    data = [
-        [f"{x:.4f}" for x in pdf] + [f"{median:.4f}"],
-        [f"{x:.4f}" for x in cdf] + [f"{mad:.4f}"],
-    ]
-    header = ["<0.6", "<0.7", "<0.8", "<0.9", "<1.0", "Median/MAD"]
-    print(tabulate(data, header=header))
+    print(
+        tabulate(
+            [
+                ["<0.6", "<0.7", "<0.8", "<0.9", "<1.0", "Median/MAD"],
+                [f"{x:.4f}" for x in pdf] + [f"{median:.4f}"],
+                [f"{x:.4f}" for x in cdf] + [f"{mad:.4f}"],
+            ],
+            style="grid",
+            nohead=True,
+        ),
+    )

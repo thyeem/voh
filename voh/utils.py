@@ -221,7 +221,7 @@ def cosim(model, x, y):
 # ----------------------
 @fx
 def dumper(**kwargs):
-    print(neatly(dmap(**kwargs), _cols=20, _sort=False))
+    print(neatly(dmap(**kwargs), margin=20, sort=False))
 
 
 def which_model(name, dir=default.modelpath):
@@ -258,8 +258,9 @@ def list_models(dir=default.modelpath):
     ]
     print(
         tabulate(
-            [(n, s, timeago(t)) for n, s, t in sort(data, key=nth(3))],
-            header=mapl(str.upper, ("name", "size", "modified")),
+            [mapl(str.upper, ("name", "size", "modified"))]
+            + [(n, s, timeago(t)) for n, s, t in sort(data, key=nth(3))],
+            nohead=True,
         ),
     )
 
