@@ -99,7 +99,7 @@ class voh(nn.Module):
             ),
             loss=dmap(t=dataQ(self.conf.size_val), v=dataQ(self.conf.size_val)),
         )
-        self.dq.mine.th.update(1 - self.conf.neg_mining)
+        self.dq.mine.th.update(1 - self.conf.ratio_hard)
         self.ema = ema(alpha=self.stat.alpha)
         return self
 
@@ -313,9 +313,8 @@ class voh(nn.Module):
             positive = positive[i]
             negative = negative[j]
         return (
-            1
-            - F.cosine_similarity(anchor, positive, dim=-1)
-            + np.pi
+            np.pi
+            + torch.acos(F.cosine_similarity(anchor, positive, dim=-1))
             - torch.acos(F.cosine_similarity(anchor, negative, dim=-1))
         ).mean()
 
@@ -324,14 +323,17 @@ class voh(nn.Module):
         """Find the indices of the most challenging negatives."""
 
         def cutval(threshold):
-            return min(0.8, self.dq.mine.neg.percentile(100 * threshold))
+            return min(
+                1 - self.conf.ratio_hard,
+                self.dq.mine.neg.percentile(100 * threshold),
+            )
 
         M = F.cosine_similarity(
             anchor.unsqueeze(1),
             negative.unsqueeze(0),
             dim=-1,
         )
-        threshold = 1 - self.conf.neg_mining
+        threshold = 1 - self.conf.ratio_hard
         iq = (M > cutval(threshold)).nonzero()
         while not len(iq):
             if threshold <= 0.8:  # ensure non-zero mask
@@ -453,7 +455,7 @@ class voh(nn.Module):
                 f" >= {self.stat.minloss:.4f}",
             ],
         ]
-        print(tabulate(filterl(bool, log), nohead=True))
+        print(tabulate(filterl(bool, log), nohead=True), "\n")
 
     def save(self, name=None, ckpt=None):
         name = name or self.name
