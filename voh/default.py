@@ -30,6 +30,7 @@ conf = dmap(
     reset=(META, False),
     seed=(META, None),
     margin=(META, 0.2),
+    rho=(META, 0.1),
     ratio_hard=(META, 0.1),
     weight_decay=(META, 1e-4),
     momentum=(META, 0.9),

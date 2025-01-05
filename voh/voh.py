@@ -299,7 +299,7 @@ class voh(nn.Module):
                 loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
                 self.optim.step()
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
@@ -312,21 +312,18 @@ class voh(nn.Module):
             anchor = anchor[i]
             positive = positive[i]
             negative = negative[j]
-        return (
-            np.pi
-            + torch.acos(F.cosine_similarity(anchor, positive, dim=-1))
-            - torch.acos(F.cosine_similarity(anchor, negative, dim=-1))
-        ).mean()
+        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        an = F.cosine_similarity(anchor, negative, dim=-1)
+        lossT = F.relu(self.conf.margin + an - ap).mean()
+        lossN = (np.pi - torch.acos(an)).mean()
+        return lossT + self.conf.rho * lossN
 
     @torch.no_grad()
     def mine(self, anchor, negative):
         """Find the indices of the most challenging negatives."""
 
         def cutval(threshold):
-            return min(
-                1 - self.conf.ratio_hard,
-                self.dq.mine.neg.percentile(100 * threshold),
-            )
+            return self.dq.mine.neg.percentile(100 * threshold)
 
         M = F.cosine_similarity(
             anchor.unsqueeze(1),
