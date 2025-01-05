@@ -331,34 +331,26 @@ def index_data(path, out="data.db", split=None):
 
 
 @fx
-def segment_data(
-    path,
-    dur=4,
-    min_dur=2.5,
-    keep_orig=False,
-    eps=0.1,
-    workers=None,
-):
+def segment_data(path, dur=4, min_dur=1.5, keep_orig=False, workers=None):
     """Segment audio files in the given path into shorter clips."""
     f = partial(
         segment_wav,
         dur=dur,
         min_dur=min_dur,
         keep_orig=keep_orig,
-        eps=eps,
     )
     for speaker in tracker(ls(path), "segmenting wavs"):
         wavs = ls(speaker, grep=r"\.wav$")
         parmap(f, wavs, workers=workers)
 
 
-def segment_wav(wav, dur=4, min_dur=2.5, keep_orig=False, eps=0.1):
+def segment_wav(wav, dur=4, min_dur=1.5, keep_orig=False):
     """Segment a given wav file into shorter clips."""
     dur_wav = get_duration(wav)
     if not dur_wav or dur_wav < min_dur:
         shell(f"rm -f {wav}")
         return
-    if dur_wav <= dur + eps:
+    if dur_wav <= dur:
         return
     label = basename(stripext(wav))
     split_wav(wav, label=label, dur=dur, min_dur=min_dur, v=False)
