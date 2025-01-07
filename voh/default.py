@@ -30,7 +30,6 @@ conf = dmap(
     reset=(META, False),
     seed=(META, None),
     margin=(META, 0.2),
-    rho=(META, 0.1),
     ratio_hard=(META, 0.1),
     weight_decay=(META, 1e-4),
     momentum=(META, 0.9),
@@ -48,7 +47,7 @@ conf = dmap(
     num_workers=(META, 2),
     num_aug=(META, 3),
     prob_aug=(META, 0.3),
-    size_mineq=(META, 10000),
+    size_mineq=(META, 5000),
 )
 
 modelpath = f"{dirname(__file__)}/../o"

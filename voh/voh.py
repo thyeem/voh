@@ -88,13 +88,17 @@ class voh(nn.Module):
             )
         else:
             self.stat = dmap(stat)
-        size_p = self.conf.size_val * self.conf.size_batch
-        size_n = self.conf.size_val * self.conf.size_batch**2
         self.dq = dmap(
-            pos=dmap(t=dataQ(size_p), v=dataQ(size_p)),
-            neg=dmap(t=dataQ(size_p), v=dataQ(size_p)),
+            pos=dmap(
+                t=dataQ(self.conf.size_val * self.conf.size_batch),
+                v=dataQ(self.conf.size_val * self.conf.size_batch),
+            ),
+            neg=dmap(
+                t=dataQ(self.conf.size_val * self.conf.size_batch**2),
+                v=dataQ(self.conf.size_val * self.conf.size_batch**2),
+            ),
             mine=dmap(
-                neg=dataQ(self.conf.size_mineq),
+                loss=dataQ(self.conf.size_mineq),
                 th=dataQ(self.conf.size_mineq),
             ),
             loss=dmap(t=dataQ(self.conf.size_val), v=dataQ(self.conf.size_val)),
@@ -278,12 +282,18 @@ class voh(nn.Module):
     @torch.no_grad()
     def prepare(self, dl):
         dl.train()
-        if not self.dq.mine.neg.data:
+        if not self.dq.mine.loss.data:
             self.train()
-            size = self.dq.mine.neg.data.maxlen // (self.conf.size_batch**2)
+            size = self.dq.mine.loss.data.maxlen // (self.conf.size_batch**2)
             for _ in tracker(range(size), "preparing"):
-                anchor, positive, negative = map(self, next(dl))
+                anchor, positive, negative = self.next(dl)
                 self.update_stat(anchor, positive, negative)
+
+    def next(self, dl):
+        return map(
+            cf_(f_(F.normalize, dim=-1), self),
+            next(dl),
+        )
 
     def get_trained(self):
         dl = self.dl()  # dataloader of (training + validation) set
@@ -294,65 +304,61 @@ class voh(nn.Module):
                 self.train()
                 self.update_lr(sched=True)
                 self.validate(dl, sched=True)
-                anchor, positive, negative = map(self, next(dl))
+                anchor, positive, negative = self.next(dl)
                 self.update_stat(anchor, positive, negative)
-                loss = self.get_loss(anchor, positive, negative)
+                loss = self.get_loss(anchor, positive, negative).mean()
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
                 self.optim.step()
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
                 self.it += 1
         self.checkpoint()
 
-    def get_loss(self, anchor, positive, negative):
-        if self.training:  # hard mining when training mode
-            i, j = self.mine(anchor, negative)
+    def get_loss(self, anchor, positive, negative, mining=False):
+        if self.training and not mining:  # hard mining in training mode
+            i, j = self.mine(anchor, positive, negative)
             anchor = anchor[i]
             positive = positive[i]
             negative = negative[j]
-        ap = F.cosine_similarity(anchor, positive, dim=-1)
-        an = F.cosine_similarity(anchor, negative, dim=-1)
-        lossT = F.relu(self.conf.margin + an - ap).mean()
-        lossN = (np.pi - torch.acos(an)).mean()
-        return lossT + self.conf.rho * lossN
+        if mining:  # creating similarity matrix when mining
+            ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
+            an = F.cosine_similarity(
+                anchor.unsqueeze(1),
+                negative.unsqueeze(0),
+                dim=-1,
+            )
+        else:
+            ap = F.cosine_similarity(anchor, positive, dim=-1)
+            an = F.cosine_similarity(anchor, negative, dim=-1)
+        return F.relu(self.conf.margin + an - ap) + (1 - torch.acos(an) / np.pi)
 
     @torch.no_grad()
-    def mine(self, anchor, negative):
+    def mine(self, anchor, positive, negative):
         """Find the indices of the most challenging negatives."""
-
-        def cutval(threshold):
-            return self.dq.mine.neg.percentile(100 * threshold)
-
-        M = F.cosine_similarity(
-            anchor.unsqueeze(1),
-            negative.unsqueeze(0),
-            dim=-1,
-        )
+        loss = self.get_loss(anchor, positive, negative, mining=True)
         threshold = 1 - self.conf.ratio_hard
-        iq = (M > cutval(threshold)).nonzero()
-        while not len(iq):
-            if threshold <= 0.8:  # ensure non-zero mask
-                iq = (M == torch.max(M)).nonzero()
+        q = (loss > self.dq.mine.loss.percentile(100 * threshold)).nonzero()
+        while not len(q):
+            if threshold <= 0.5:  # ensure non-zero mask
+                q = (loss == torch.max(loss)).nonzero()
                 break
             threshold -= 0.01
-            iq = (M > cutval(threshold)).nonzero()
+            q = (loss > self.dq.mine.loss.percentile(100 * threshold)).nonzero()
         self.dq.mine.th.update(threshold)
-        return iq[:, 0], iq[:, 1]
+        self.dq.mine.loss.update(loss.tolist())
+        return q[:, 0], q[:, 1]
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
         an = F.cosine_similarity(
-            anchor.unsqueeze(1),
-            negative.unsqueeze(0),
-            dim=-1,
+            anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1
         ).tolist()
         if self.training:
             self.dq.pos.t.update(ap)
             self.dq.neg.t.update(an)
-            self.dq.mine.neg.update(an)
         else:
             self.dq.pos.v.update(ap)
             self.dq.neg.v.update(an)
@@ -367,9 +373,11 @@ class voh(nn.Module):
         self.eval()
         dl.eval()
         for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = map(self, next(dl))
+            anchor, positive, negative = self.next(dl)
             self.update_stat(anchor, positive, negative)
-            self.dq.loss.v.update(self.get_loss(anchor, positive, negative).item())
+            self.dq.loss.v.update(
+                self.get_loss(anchor, positive, negative).mean().item()
+            )
         self.stat.loss.v = self.ema(self.stat.loss.v, self.dq.loss.v.median)
         if self.stat.loss.v < self.stat.minloss:
             self.stat.minloss = self.stat.loss.v
@@ -420,7 +428,7 @@ class voh(nn.Module):
         if sched and not self.on_interval(self.conf.size_val):
             return
         self.stat.loss.t = self.ema(self.stat.loss.t, self.dq.loss.t.median)
-        cutval = self.dq.mine.neg.percentile(100 * self.dq.mine.th.median)
+        cutval = self.dq.mine.loss.percentile(100 * self.dq.mine.th.median)
         log = [
             (
                 [
