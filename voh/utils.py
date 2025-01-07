@@ -157,12 +157,12 @@ def filterbank(
         _ + 1e-10,
     )(y)
 
+
 @torch.no_grad()
 def normalize_channel(x):
     mean = x.mean(dim=1, keepdim=True)
     std = x.std(dim=1, keepdim=True)
     return (x - mean) / (std + 1e-8)
-
 
 
 @torch.no_grad()
@@ -206,15 +206,6 @@ def sched_lr(it, lr=1e-3, lr_min=1e-5, steps=10000, warmup=1000):
     decay_ratio = (it - warmup) / (steps - warmup)
     guard(0 <= decay_ratio <= 1, f"Error, invalid decay ratio: {decay_ratio}")
     return lr_min + 0.5 * (lr - lr_min) * (1.0 + math.cos(math.pi * decay_ratio))
-
-
-@torch.no_grad()
-def cosim(model, x, y):
-    model.eval()
-    return F.cosine_similarity(
-        model.get_embedding(x),
-        model.get_embedding(y),
-    ).item()
 
 
 # ----------------------
@@ -1039,13 +1030,22 @@ def _toptier(d, tier):
     return mapl(fst, sort(d.items(), key=lambda x: x[1], reverse=True)[:tier])
 
 
+@torch.no_grad()
+def nemo_cosim(model, x, y):
+    model.eval()
+    return F.cosine_similarity(
+        model.get_embedding(x),
+        model.get_embedding(y),
+    ).item()
+
+
 def mcmc_sample(model, jar, limit, size):
     cache = {}
     counts = {k: 0 for k in jar}
     cosims = {k: [0] for k in jar}
     warmup = int(size * BURN_IN)
     a, b = choice(jar, size=2)
-    corr = cosim(model, a, b)
+    corr = nemo_cosim(model, a, b)
     cache[_pair_id(a, b)] = corr
     for i in tracker(range(size + warmup), "MCMC sampling".rjust(COL)):
         new_a, new_b = choice(jar, size=2)
@@ -1053,7 +1053,7 @@ def mcmc_sample(model, jar, limit, size):
         if k in cache:
             new_corr = cache[k]
         else:
-            new_corr = cosim(model, new_a, new_b)
+            new_corr = nemo_cosim(model, new_a, new_b)
             cache[k] = new_corr
         if new_corr > limit or rand(0, 1) < np.exp(
             (new_corr - corr) / (1 - corr),
@@ -1074,7 +1074,7 @@ def challenge(model, refs, targets, tol, cache):
         corrs = []
         for r in refs:
             k = _pair_id(r, t)
-            corrs.append(cache[k] if k in cache else cosim(model, r, t))
+            corrs.append(cache[k] if k in cache else nemo_cosim(model, r, t))
             score = hmean(corrs)
         if score < tol:
             doom.append(t)

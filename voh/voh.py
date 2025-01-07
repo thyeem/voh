@@ -332,7 +332,9 @@ class voh(nn.Module):
         else:
             ap = F.cosine_similarity(anchor, positive, dim=-1)
             an = F.cosine_similarity(anchor, negative, dim=-1)
-        return F.relu(self.conf.margin + an - ap) + (1 - torch.acos(an) / np.pi)
+        return F.relu(
+            an - torch.cos(self.conf.margin + torch.acos(ap)),
+        ) + (1 - torch.acos(an) / np.pi)
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
