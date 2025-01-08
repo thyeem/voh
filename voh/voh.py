@@ -99,11 +99,11 @@ class voh(nn.Module):
             ),
             mine=dmap(
                 loss=dataQ(self.conf.size_mineq),
+                cutval=dataQ(self.conf.size_mineq),
                 th=dataQ(self.conf.size_mineq),
             ),
             loss=dmap(t=dataQ(self.conf.size_val), v=dataQ(self.conf.size_val)),
         )
-        self.dq.mine.th.update(1 - self.conf.ratio_hard)
         self.ema = ema(alpha=self.stat.alpha)
         return self
 
@@ -317,7 +317,7 @@ class voh(nn.Module):
         self.checkpoint()
 
     def get_loss(self, anchor, positive, negative, mining=False):
-        if self.training and not mining:  # hard mining in training mode
+        if self.training and not mining:  # online hard mining
             i, j = self.mine(anchor, positive, negative)
             anchor = anchor[i]
             positive = positive[i]
@@ -332,24 +332,25 @@ class voh(nn.Module):
         else:
             ap = F.cosine_similarity(anchor, positive, dim=-1)
             an = F.cosine_similarity(anchor, negative, dim=-1)
-        return F.relu(
-            an - torch.cos(self.conf.margin + torch.acos(ap)),
-        ) + (1 - torch.acos(an) / np.pi)
+        return F.relu(torch.acos(ap) - torch.acos(an) + self.conf.margin)
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
         """Find the indices of the most challenging negatives."""
         loss = self.get_loss(anchor, positive, negative, mining=True)
         threshold = 1 - self.conf.ratio_hard
-        q = (loss > self.dq.mine.loss.percentile(100 * threshold)).nonzero()
+        cutval = self.dq.mine.loss.percentile(100 * threshold)
+        q = (loss > cutval).nonzero()
         while not len(q):
             if threshold <= 0.5:  # ensure non-zero mask
                 q = (loss == torch.max(loss)).nonzero()
                 break
             threshold -= 0.01
-            q = (loss > self.dq.mine.loss.percentile(100 * threshold)).nonzero()
-        self.dq.mine.th.update(threshold)
+            cutval = self.dq.mine.loss.percentile(100 * threshold)
+            q = (loss > cutval).nonzero()
         self.dq.mine.loss.update(loss.tolist())
+        self.dq.mine.cutval.update(cutval)
+        self.dq.mine.th.update(threshold)
         return q[:, 0], q[:, 1]
 
     @torch.no_grad()
@@ -430,16 +431,16 @@ class voh(nn.Module):
         if sched and not self.on_interval(self.conf.size_val):
             return
         self.stat.loss.t = self.ema(self.stat.loss.t, self.dq.loss.t.median)
-        cutval = self.dq.mine.loss.percentile(100 * self.dq.mine.th.median)
+        ths = flat(self.dq.mine.th.percentile([25, 50, 75]))
         log = [
             (
                 [
                     "Step",
                     "LR",
-                    "TH(Value)",
-                    "P Median/MAD",
-                    "N Median/MAD",
-                    "Loss(EMA) >= MIN",
+                    "Hard cutoff",
+                    "Pos MED/MAD",
+                    "Neg MED/MAD",
+                    "Loss(EMA) >= min",
                 ]
                 if self.on_interval(5 * self.conf.size_val)
                 else []
@@ -447,7 +448,7 @@ class voh(nn.Module):
             [
                 f"{self.it:06d}",
                 f"{self._lr:.8f}",
-                f"{self.dq.mine.th.median:.2f}({cutval:.4f})",
+                f"{self.dq.mine.cutval.median:.4f}/{self.dq.mine.cutval.mad:.4f}",
                 f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
                 f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
                 f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
@@ -455,7 +456,7 @@ class voh(nn.Module):
             [
                 "val",
                 "-",
-                "-",
+                "/".join(map(lambda x: f"{x:.2f}", ths)),
                 f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
                 f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
                 f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"

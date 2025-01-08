@@ -68,6 +68,8 @@ class dataQ:
         if _ns_iterp(v):
             self.data.extend(v)
         else:
+            if np.isnan(v):
+                return
             self.data.append(v)
 
     @property
