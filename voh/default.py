@@ -22,32 +22,32 @@ conf = dmap(
     # -----------------------
     # dataset/training
     # -----------------------
-    num_mel_filters=(META, 80),
-    samplerate=(META, 16000),
-    max_frames=(META, 400),
-    ds_train=(META, None),
-    ds_val=(META, None),
-    reset=(META, False),
-    seed=(META, None),
-    margin=(META, 0.3),
-    ratio_hard=(META, 0.1),
-    weight_decay=(META, 1e-4),
-    momentum=(META, 0.9),
-    betas=(META, (0.9, 0.999)),
-    ratio_warmup=(META, 0.01),
-    optim=(META, None),
-    lr=(META, 3e-4),
-    lr_min=(META, 1e-6),
-    epochs=(META, 1),
-    steps=(META, 10000),
+    num_mel_filters=(META, 80),  # number of Mel-filterbanks
+    samplerate=(META, 16000),  # waveform sample rate
+    max_frames=(META, 400),  # maximum time frames (trim)
+    ds_train=(META, None),  # filepath of training dataset
+    ds_val=(META, None),  # path of validation dataset
+    reset=(META, False),  # reset meta data when retraining
+    seed=(META, None),  # random seed
+    margin=(META, 0.3),  # size of additive angular margin
+    ratio_hard=(META, 0.1),  # ratio of hard-negatives
+    weight_decay=(META, 1e-4),  # optimizer's weight decay
+    momentum=(META, 0.9),  # optimizer's momentum
+    betas=(META, (0.9, 0.999)),  # optimizer's betas
+    ratio_warmup=(META, 0.01),  # ratio of warmup to total step
+    optim=(META, None),  # kind of optimizer: {sgd, adam, adamw}
+    lr=(META, 3e-4),  # learning rate
+    lr_min=(META, 1e-6),  # mininum of learning rate
+    epochs=(META, 1),  # number of epochs
+    steps=(META, 10000),  # number of steps per epoch
     int_sched_lr=(META, 20),  # interval of updating lr, None for no decay
-    size_batch=(META, 8),
-    size_val=(META, 20),  # also interval of logging
+    size_batch=(META, 8),  # number of samples per iteration
+    size_val=(META, 20),  # size of validation / interval of logging
     int_val=(META, 100),  # interval of validation
-    num_workers=(META, 2),
-    num_aug=(META, 2),
-    prob_aug=(META, 0.3),
-    size_mineq=(META, 20000),
+    num_workers=(META, 2),  # number of dataloader workers
+    num_aug=(META, 2),  # number of audio augmentation types used
+    prob_aug=(META, 0),  # probability of audio augmentation
+    size_mineq=(META, 20000),  # size of queue when hard mining
 )
 
 modelpath = f"{dirname(__file__)}/../o"

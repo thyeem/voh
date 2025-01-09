@@ -20,47 +20,44 @@ class _dataset:
         sr=16000,
         max_frames=400,
         size_batch=1,
-        prob_aug=None,
+        prob_aug=0,
         num_aug=1,
     ):
         super().__init__()
-        self.n_mels = n_mels
-        self.sr = sr
         self.db = read_json(path)
         self.max_frames = max_frames
         self.size_batch = size_batch
         self.prob_aug = prob_aug
-        self.num_aug = num_aug
+        self.augmentor = perturb(num_aug=num_aug)  # audio augmentor
+        self.mel_fb = filterbank(  # log Mel-filterbank energies
+            n_mels=n_mels,
+            sr=sr,
+            max_frames=max_frames,
+            norm_channel=True,
+        )
 
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                cf_(
-                    f_(pad_, max_frames=self.max_frames),  # collate-fn
-                    self.processor,  # filterbank + norm-channel + perturb
+                f_(pad_, max_frames=self.max_frames),  # collate-fn
+                zip(
+                    *map(
+                        self.processor,  # filterbank + norm-channel + perturb
+                        zip(*triplet(self.db, size=self.size_batch)),
+                    ),
                 ),
-                enumerate(triplet(self.db, size=self.size_batch)),  # triplet set
             )
             yield anchors, positives, negatives
 
-    def processor(self, x):
-        label, wavs = x
+    def processor(self, triad):
+        anchor, positive, negative = map(readwav, triad)
         return map(
-            cf_(
-                filterbank(  # log Mel-filterbank energies
-                    n_mels=self.n_mels,
-                    sr=self.sr,
-                    max_frames=self.max_frames,
-                    norm_channel=True,
-                ),
-                (  # no perturb when validation set or anchors
-                    probify(p=self.prob_aug)(perturb(num_aug=self.num_aug))
-                    if self.prob_aug and label
-                    else id
-                ),
-                readwav,
-            ),
-            wavs,
+            self.mel_fb,  # filterbank + norm-channel
+            (
+                anchor,
+                self.augmentor(anchor) if rand() < self.prob_aug else positive,
+                probify(p=self.prob_aug)(self.augmentor)(negative),
+            ),  # audio augmentation
         )
 
 
