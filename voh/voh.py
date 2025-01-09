@@ -328,7 +328,7 @@ class voh(nn.Module):
 
     @torch.no_grad()
     def mine(self, anchor, negative):
-        """Find the indices of the most challenging negatives."""
+        """Find the indices of challenging negatives based on distribution."""
         S = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
         threshold = 1 - self.conf.ratio_hard
         cutval = self.dq.mine.neg.percentile(100 * threshold)
@@ -343,7 +343,10 @@ class voh(nn.Module):
         self.dq.mine.neg.update(S.tolist())
         self.dq.mine.cutval.update(cutval)
         self.dq.mine.th.update(threshold)
-        return q[:, 0], q[:, 1]
+
+        # (only batch size) in descending order based on their values
+        q = q[torch.argsort(S[q[:, 0], q[:, 1]], descending=True)]
+        return q[: self.conf.size_batch, 0], q[: self.conf.size_batch, 1]
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
