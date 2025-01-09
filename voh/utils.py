@@ -112,7 +112,7 @@ def ema(prev, new, alpha=0.1):
 
 @fx
 def filterbank(
-    f,
+    ysr,
     sr=16000,
     n_fft=512,
     hop_length=160,
@@ -120,7 +120,6 @@ def filterbank(
     fmin=0,
     fmax=None,
     max_frames=None,
-    from_ysr=False,
     norm_channel=True,
 ):
     """Generate log of Mel-filterbank energies from a given wavfile.
@@ -137,8 +136,7 @@ def filterbank(
     num_frames = 1 + [SAMPLES(t*sr) - WINDOW_SIZE(n_fft)] / hop_length
      1-sec wav = 1 + [1*16000 - 512] / 160 = 98 (frames/sec)
     """
-
-    y, orig_sr = f if from_ysr else readwav(f)
+    y, orig_sr = ysr
     if sr != orig_sr:
         y = librosa.resample(y, orig_sr=orig_sr, target_sr=sr)
     y = librosa.feature.melspectrogram(
@@ -472,20 +470,6 @@ def randwav(db, key=None, size=1):
 
 
 @fx
-def augwav(f, augmentor=None, out=None, wav=True):
-    augmentor = augmentor or demo_aug(v=True)
-    return cf_(
-        (
-            savewav(out or tmpfile(suffix=".wav", dir=f"/tmp/{speaker_id(f)}"))
-            if wav
-            else id
-        ),
-        augmentor,
-        readwav,
-    )(f)
-
-
-@fx
 def randpair(db, mono=False, sync=False, key=None, size=1):
     """Get random pair(s) of voices from the given indexed data.
     If ``mono=True``, returns positive pair(s). Otherwise negative pair(s).
@@ -808,41 +792,22 @@ def time_inverse(ysr, v=False):
     return ysr
 
 
-def demo_aug(p=1, v=False):
-    g = lazy(
-        shuffle,
-        [
-            gaussian_noise(snr=(10, 20), v=v),
-            sfx_noise(snr=(5, 10), v=v),
-            time_shift(sec=(-1.5, 1.5), v=v),
-            time_stretch(rate=(0.8, 1.2), v=v),
-            pitch_shift(semitone=(-2, 2), v=v),
-            clip_distortion(threshold=(0.1, 0.5), v=v),
-            gain(db=(-6, 6), v=v),
-            normalize(v=v),
-            equalize(low=(0.9, 1.1), mid=(0.9, 1.1), high=(0.9, 1.1), v=v),
-            reverb(delay=(0.15), decay=(0.3), v=v),
-            resample(sr=(8000, 44100), v=v),
-            room_simulator(decay=(20, 40), v=v),
-            bandpass(low=(100, 400), high=(1500, 4000), v=v),
-        ],
-    )
-    return cf_(*map(probify(p=p), force(g)))
-
-
-def perturb(p=0.3, num_aug=3, v=False):
+@fx
+def perturb(ysr, num_aug=None, v=False):
     augmetors = [
-        gain(db=(-3, 3), v=v),
         gaussian_noise(snr=(5, 10), v=v),
         sfx_noise(snr=(5, 10), v=v),
-        equalize(low=(0.5, 1.5), mid=(0.5, 1.5), high=(0.5, 1.5), v=v),
+        time_shift(sec=(-1, 1), v=v),
         time_stretch(rate=(0.8, 1.2), v=v),
         pitch_shift(semitone=(-2.0, 2.0), v=v),
-        bandpass(low=(100, 400), high=(1500, 4000), v=v),
+        clip_distortion(threshold=(0.1, 0.5), v=v),
+        gain(db=(-3, 3), v=v),
+        equalize(low=(0.5, 1.5), mid=(0.5, 1.5), high=(0.5, 1.5), v=v),
         reverb(delay=(0.1), decay=(0.3), v=v),
         room_simulator(decay=(10, 20), v=v),
+        bandpass(low=(100, 400), high=(1500, 4000), v=v),
     ]
-    return probify(p=p)(cf_(*choice(augmetors, size=num_aug)))
+    return cf_(*choice(augmetors, size=num_aug or len(augmetors)))(ysr)
 
 
 def randsfx():

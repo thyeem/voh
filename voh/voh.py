@@ -98,7 +98,7 @@ class voh(nn.Module):
                 v=dataQ(self.conf.size_val * self.conf.size_batch**2),
             ),
             mine=dmap(
-                loss=dataQ(self.conf.size_mineq),
+                neg=dataQ(self.conf.size_mineq),
                 cutval=dataQ(self.conf.size_mineq),
                 th=dataQ(self.conf.size_mineq),
             ),
@@ -247,7 +247,7 @@ class voh(nn.Module):
     def forward(self, x, mask=None):
         x = x.to(device=self.device)
         if mask is None:
-            mask = create_mask(x)
+            mask = create_mask(x, max_frames=self.conf.max_frames)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
@@ -258,7 +258,7 @@ class voh(nn.Module):
         """Load a given wav file in forms of log Mel-filterbank energies"""
         return (
             filterbank(
-                f,
+                readwav(f),
                 n_mels=self.conf.num_mel_filters,
                 sr=self.conf.samplerate,
                 max_frames=self.conf.max_frames,
@@ -282,9 +282,9 @@ class voh(nn.Module):
     @torch.no_grad()
     def prepare(self, dl):
         dl.train()
-        if not self.dq.mine.loss.data:
+        if not self.dq.mine.neg.data:
             self.train()
-            size = self.dq.mine.loss.data.maxlen // (self.conf.size_batch**2)
+            size = self.dq.mine.neg.data.maxlen // (self.conf.size_batch**2)
             for _ in tracker(range(size), "preparing"):
                 anchor, positive, negative = self.next(dl)
                 self.update_stat(anchor, positive, negative)
@@ -306,7 +306,7 @@ class voh(nn.Module):
                 self.validate(dl, sched=True)
                 anchor, positive, negative = self.next(dl)
                 self.update_stat(anchor, positive, negative)
-                loss = self.get_loss(anchor, positive, negative).mean()
+                loss = self.get_loss(anchor, positive, negative)
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
@@ -316,39 +316,31 @@ class voh(nn.Module):
                 self.it += 1
         self.checkpoint()
 
-    def get_loss(self, anchor, positive, negative, mining=False):
-        if self.training and not mining:  # online hard mining
-            i, j = self.mine(anchor, positive, negative)
+    def get_loss(self, anchor, positive, negative):
+        if self.training:  # online hard mining
+            i, j = self.mine(anchor, negative)
             anchor = anchor[i]
             positive = positive[i]
             negative = negative[j]
-        if mining:  # creating similarity matrix when mining
-            ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
-            an = F.cosine_similarity(
-                anchor.unsqueeze(1),
-                negative.unsqueeze(0),
-                dim=-1,
-            )
-        else:
-            ap = F.cosine_similarity(anchor, positive, dim=-1)
-            an = F.cosine_similarity(anchor, negative, dim=-1)
-        return F.relu(torch.acos(ap) - torch.acos(an) + self.conf.margin)
+        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        an = F.cosine_similarity(anchor, negative, dim=-1)
+        return F.relu(torch.acos(ap) - torch.acos(an) + self.conf.margin).mean()
 
     @torch.no_grad()
-    def mine(self, anchor, positive, negative):
+    def mine(self, anchor, negative):
         """Find the indices of the most challenging negatives."""
-        loss = self.get_loss(anchor, positive, negative, mining=True)
+        S = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
         threshold = 1 - self.conf.ratio_hard
-        cutval = self.dq.mine.loss.percentile(100 * threshold)
-        q = (loss > cutval).nonzero()
+        cutval = self.dq.mine.neg.percentile(100 * threshold)
+        q = (S > cutval).nonzero()
         while not len(q):
             if threshold <= 0.5:  # ensure non-zero mask
-                q = (loss == torch.max(loss)).nonzero()
+                q = (S == torch.max(S)).nonzero()
                 break
             threshold -= 0.01
-            cutval = self.dq.mine.loss.percentile(100 * threshold)
-            q = (loss > cutval).nonzero()
-        self.dq.mine.loss.update(loss.tolist())
+            cutval = self.dq.mine.neg.percentile(100 * threshold)
+            q = (S > cutval).nonzero()
+        self.dq.mine.neg.update(S.tolist())
         self.dq.mine.cutval.update(cutval)
         self.dq.mine.th.update(threshold)
         return q[:, 0], q[:, 1]
@@ -378,9 +370,7 @@ class voh(nn.Module):
         for _ in tracker(range(self.conf.size_val), "validation"):
             anchor, positive, negative = self.next(dl)
             self.update_stat(anchor, positive, negative)
-            self.dq.loss.v.update(
-                self.get_loss(anchor, positive, negative).mean().item()
-            )
+            self.dq.loss.v.update(self.get_loss(anchor, positive, negative).item())
         self.stat.loss.v = self.ema(self.stat.loss.v, self.dq.loss.v.median)
         if self.stat.loss.v < self.stat.minloss:
             self.stat.minloss = self.stat.loss.v
@@ -415,13 +405,13 @@ class voh(nn.Module):
         return _dataloader(
             _dataset(  # training dataset
                 self.conf.ds_train,
-                p=self.conf.prob_aug,
+                prob_aug=self.conf.prob_aug,
                 num_aug=self.conf.num_aug,
                 **shared,
             ),
             _dataset(  # validation dataset
                 self.conf.ds_val,
-                p=None,
+                prob_aug=None,
                 **shared,
             ),
             num_workers=self.conf.num_workers,

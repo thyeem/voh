@@ -256,12 +256,9 @@ def eval_error_rate(
     mono == True  -> test false-negative or FN (Type II error)
     """
 
-    aug = probify(p=p)(augwav(augmentor=augmentor)) if augmentor and p else id
-
     def loader():
         while True:
-            a, b = randpair(db, mono=mono, sync=sync)
-            yield a, aug(b)
+            yield randpair(db, mono=mono, sync=sync)
 
     if out:
         out = writer(f"{out}.{'frr' if mono else 'far'}")
@@ -355,7 +352,7 @@ def eval_bin_metrics(
         for a, b in uniq(pairs):
             o.write(f"{d.get((a,b)):.4f}  {archive(a)}  {archive(b)}\n")
 
-    aug = probify(p=p)(augwav(augmentor=augmentor)) if augmentor and p else id
+    # TODO: consider augmentor
     mkdir(dirname(prefix))
     out = f"{prefix}-{size:06d}"
     if pairs is None:
@@ -394,27 +391,13 @@ def eval_bin_metrics(
 
 
 def pairs_pos(size, db, sync=False, key=None, augmentor=None, p=None):
-    aug = probify(p=p)(augwav(augmentor=augmentor)) if augmentor and p else id
-    return [
-        bimap(
-            id,
-            aug,
-            randpair(db, mono=1, sync=sync, key=key),
-        )
-        for _ in range(size)
-    ]
+    # TODO: consider augmentor
+    return [randpair(db, mono=1, sync=sync, key=key) for _ in range(size)]
 
 
 def pairs_neg(size, db, key=None, augmentor=None, p=None):
-    aug = probify(p=p)(augwav(augmentor=augmentor)) if augmentor and p else id
-    return [
-        bimap(
-            id,
-            aug,
-            randpair(db, mono=0, key=key),
-        )
-        for _ in range(size)
-    ]
+    # TODO: consider augmentor
+    return [randpair(db, mono=0, key=key) for _ in range(size)]
 
 
 def readbcm(f):

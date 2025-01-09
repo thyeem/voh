@@ -20,35 +20,48 @@ class _dataset:
         sr=16000,
         max_frames=400,
         size_batch=1,
-        p=None,
+        prob_aug=None,
         num_aug=1,
     ):
         super().__init__()
         self.n_mels = n_mels
         self.sr = sr
         self.db = read_json(path)
+        self.max_frames = max_frames
         self.size_batch = size_batch
-        self.processor = cf_(  # log Mel-filterbanks
-            filterbank(
-                n_mels=n_mels,
-                sr=sr,
-                max_frames=max_frames,
-                from_ysr=bool(p),
-            ),
-            (  # data augmentor
-                id  # never augment data when validation set
-                if not p
-                else augwav(augmentor=perturb(p=p, num_aug=num_aug), wav=False)
-            ),
-        )
+        self.prob_aug = prob_aug
+        self.num_aug = num_aug
 
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                cf_(pad_, mapl(self.processor)),
-                triplet(self.db, size=self.size_batch),
+                cf_(
+                    f_(pad_, max_frames=self.max_frames),  # collate-fn
+                    self.processor,  # filterbank + norm-channel + perturb
+                ),
+                enumerate(triplet(self.db, size=self.size_batch)),  # triplet set
             )
             yield anchors, positives, negatives
+
+    def processor(self, x):
+        label, wavs = x
+        return map(
+            cf_(
+                filterbank(  # log Mel-filterbank energies
+                    n_mels=self.n_mels,
+                    sr=self.sr,
+                    max_frames=self.max_frames,
+                    norm_channel=True,
+                ),
+                (  # no perturb when validation set or anchors
+                    probify(p=self.prob_aug)(perturb(num_aug=self.num_aug))
+                    if self.prob_aug and label
+                    else id
+                ),
+                readwav,
+            ),
+            wavs,
+        )
 
 
 class _safeiter:
