@@ -178,8 +178,9 @@ def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
 def create_mask(x, max_frames=None, pad=0):
     """Creates a mask based on a given input: dim of (B, 1, T)"""
     num_frames = torch.any(x != pad, dim=1).sum(dim=-1)
-    B = num_frames.size(0)
     T = torch.max(num_frames).item() if max_frames is None else max_frames
+    num_frames = torch.clamp(num_frames, max=T)
+    B = num_frames.size(0)
     return (
         torch.arange(T, device=x.device).expand(B, T) < num_frames.unsqueeze(1)
     ).unsqueeze(1)
@@ -191,7 +192,7 @@ def pad_(o, max_frames=None, ipad=0):
     """
     L = max(x.size(-1) for x in o) if max_frames is None else max_frames
     return torch.stack(
-        [F.pad(x, (0, L - x.size(1)), value=ipad).squeeze() for x in o],
+        [F.pad(x, (0, L - x.size(-1)), value=ipad).squeeze() for x in o],
     )
 
 

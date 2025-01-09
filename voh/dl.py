@@ -25,7 +25,6 @@ class _dataset:
     ):
         super().__init__()
         self.db = read_json(path)
-        self.max_frames = max_frames
         self.size_batch = size_batch
         self.prob_aug = prob_aug
         self.augmentor = perturb(num_aug=num_aug)  # audio augmentor
@@ -39,7 +38,7 @@ class _dataset:
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                f_(pad_, max_frames=self.max_frames),  # collate-fn
+                pad_,  # collate-fn
                 zip(
                     *map(
                         self.processor,  # filterbank + norm-channel + perturb

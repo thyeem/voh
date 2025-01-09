@@ -247,7 +247,7 @@ class voh(nn.Module):
     def forward(self, x, mask=None):
         x = x.to(device=self.device)
         if mask is None:
-            mask = create_mask(x, max_frames=self.conf.max_frames)
+            mask = create_mask(x)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
@@ -286,8 +286,7 @@ class voh(nn.Module):
             self.train()
             size = self.dq.mine.neg.data.maxlen // (self.conf.size_batch**2)
             for _ in tracker(range(size), "preparing"):
-                anchor, positive, negative = self.next(dl)
-                self.update_stat(anchor, positive, negative)
+                self.update_stat(*self.next(dl))
 
     def next(self, dl):
         return map(
@@ -324,6 +323,7 @@ class voh(nn.Module):
             negative = negative[j]
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
+        # return F.relu(an - torch.cos(self.conf.margin + torch.acos(ap))).mean()
         return F.relu(torch.acos(ap) - torch.acos(an) + self.conf.margin).mean()
 
     @torch.no_grad()
@@ -340,7 +340,6 @@ class voh(nn.Module):
             threshold -= 0.01
             cutval = self.dq.mine.neg.percentile(100 * threshold)
             q = (S > cutval).nonzero()
-        self.dq.mine.neg.update(S.tolist())
         self.dq.mine.cutval.update(cutval)
         self.dq.mine.th.update(threshold)
 
@@ -357,6 +356,7 @@ class voh(nn.Module):
         if self.training:
             self.dq.pos.t.update(ap)
             self.dq.neg.t.update(an)
+            self.dq.mine.neg.update(an)
         else:
             self.dq.pos.v.update(ap)
             self.dq.neg.v.update(an)
@@ -414,7 +414,7 @@ class voh(nn.Module):
             ),
             _dataset(  # validation dataset
                 self.conf.ds_val,
-                prob_aug=None,
+                prob_aug=0,
                 **shared,
             ),
             num_workers=self.conf.num_workers,
