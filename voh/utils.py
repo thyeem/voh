@@ -816,8 +816,8 @@ def perturb_nemo(ysr, v=False):
     return cf_(
         *shuffle(
             [  # The same as TitaNet-L's augmentor
-                probify(p=0.5)(gaussian_noise(snr=(0, 15), v=v)),
-                probify(p=0.3)(time_stretch(rate=(0.95, 1.05), v=v)),
+                probify(p=0.1)(gaussian_noise(snr=(0, 15), v=v)),
+                probify(p=0.1)(time_stretch(rate=(0.95, 1.05), v=v)),
             ]
         )
     )(ysr)

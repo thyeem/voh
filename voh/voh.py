@@ -322,7 +322,7 @@ class voh(nn.Module):
         an = F.pairwise_distance(anchor, negative)
         D = an - ap
         i = (D < self.conf.margin).nonzero().squeeze(-1)
-        if not len(q):
+        if not len(i):
             i = (D == torch.min(D)).nonzero().squeeze(-1)
         self.dq.mine.update(D.tolist())
         return i
