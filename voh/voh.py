@@ -98,10 +98,10 @@ class voh(nn.Module):
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(self.conf.size_val * self.conf.size_batch**2),
-                v=dataq(self.conf.size_val * self.conf.size_batch**2),
+                t=dataq(self.conf.size_val * self.conf.size_batch),
+                v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
-            mine=dataq(self.conf.size_val),
+            mine=dataq(self.conf.size_val * self.conf.size_batch),
         )
         self.ema = ema(alpha=self.stat.alpha)
         return self
@@ -295,8 +295,8 @@ class voh(nn.Module):
                 self.validate(dl, sched=True)
                 anchor, positive, negative = self.next(dl)
                 self.update_stat(anchor, positive, negative)
-                i, j = self.mine(anchor, negative, dl)
-                loss = self.get_loss(anchor[i], positive[i], negative[j])
+                i = self.mine(anchor, positive, negative)
+                loss = self.get_loss(anchor[i], positive[i], negative[i])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
@@ -308,29 +308,29 @@ class voh(nn.Module):
                     self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
-        ap = F.cosine_similarity(anchor, positive, dim=-1)
-        an = F.cosine_similarity(anchor, negative, dim=-1)
-        return (self.conf.scale * F.relu(an - ap + self.conf.margin)).mean()
+        ap = F.pairwise_distance(anchor, positive)
+        an = F.pairwise_distance(anchor, negative)
+        adaptive_margin = self.conf.margin + (ap - an).clamp(min=0)
+        loss = F.relu(ap - an + adaptive_margin)
+        return self.conf.scale * loss.mean()
 
     @torch.no_grad()
-    def mine(self, anchor, negative):
+    def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
         self.train()
-        S = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
-        q = S.nonzero()
-
-        # in descending order based on their values
-        o = q[torch.argsort(S[q[:, 0], q[:, 1]], descending=True)]
-        u = int(S.numel() * self.conf.ratio_hard)
-        self.dq.mine.update(S[o[u - 1, 0], o[u - 1, 1]].item())
-        return o[:u, 0], o[:u, 1]
+        ap = F.pairwise_distance(anchor, positive)
+        an = F.pairwise_distance(anchor, negative)
+        D = an - ap
+        i = (D < self.conf.margin).nonzero().squeeze(-1)
+        if not len(q):
+            i = (D == torch.min(D)).nonzero().squeeze(-1)
+        self.dq.mine.update(D.tolist())
+        return i
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
-        ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
-        an = F.cosine_similarity(
-            anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1
-        ).tolist()
+        ap = F.pairwise_distance(anchor, positive).tolist()
+        an = F.pairwise_distance(anchor, negative).tolist()
         if self.training:
             self.dq.pos.t.update(ap)
             self.dq.neg.t.update(an)
@@ -394,7 +394,7 @@ class voh(nn.Module):
                 [
                     "STEP",
                     "LR",
-                    "HARD-CUT",
+                    "d-DIST",
                     "POSITIVES",
                     "NEGATIVES",
                     "LOSS(EMA) >= MIN",
