@@ -30,6 +30,7 @@ conf = dmap(
     reset=(META, False),  # reset meta data when retraining
     seed=(META, None),  # random seed
     margin=(META, 0.3),  # size of additive angular margin
+    scale=(META, 8),  # temperature scaling of loss
     ratio_hard=(META, 0.1),  # ratio of hard-negatives
     weight_decay=(META, 1e-4),  # optimizer's weight decay
     momentum=(META, 0.9),  # optimizer's momentum
@@ -45,9 +46,6 @@ conf = dmap(
     size_val=(META, 20),  # size of validation / interval of logging
     int_val=(META, 100),  # interval of validation
     num_workers=(META, 2),  # number of dataloader workers
-    num_aug=(META, 2),  # number of audio augmentation types used
-    prob_aug=(META, 0),  # probability of audio augmentation
-    size_mineq=(META, 20000),  # size of queue when hard mining
 )
 
 modelpath = f"{dirname(__file__)}/../o"

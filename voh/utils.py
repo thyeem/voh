@@ -57,7 +57,7 @@ def norm_ppf(q, mean=0, std=1):
     return mean + std * np.sqrt(2) * inv_erf(2 * q - 1)
 
 
-class dataQ:
+class dataq:
     def __init__(self, k=1000, data=None):
         self.k = k
         self.data = deque(maxlen=k)
@@ -175,9 +175,9 @@ def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
 
 
 @torch.no_grad()
-def create_mask(x, max_frames=None, pad=0):
+def create_mask(x, max_frames=None, ipad=0):
     """Creates a mask based on a given input: dim of (B, 1, T)"""
-    num_frames = torch.any(x != pad, dim=1).sum(dim=-1)
+    num_frames = torch.any(x != ipad, dim=1).sum(dim=-1)
     T = torch.max(num_frames).item() if max_frames is None else max_frames
     num_frames = torch.clamp(num_frames, max=T)
     B = num_frames.size(0)
@@ -594,7 +594,7 @@ def gaussian_noise(ysr, snr=10, v=False, MIN=3, MAX=30):
     noise = np.random.normal(0, np.sqrt(noise_power), y.shape)
     ysr = y + noise, sr
     if v:
-        dumper(gaussian_noise=f"snr={snr:.1f} (signal/noise, dB)")
+        dumper(gaussian_noise=f"snr={snr:.2f} (signal/noise, dB)")
     return ysr
 
 
@@ -620,7 +620,7 @@ def time_stretch(ysr, rate=1.25, v=False):
     rate = rfnum(rate)
     ysr = librosa.effects.time_stretch(y, rate=rate), sr
     if v:
-        dumper(time_stretch=f"rate={rate:.1f} ({rate:.1f}x speed)")
+        dumper(time_stretch=f"rate={rate:.2f} ({rate:.2f}x speed)")
     return ysr
 
 
@@ -794,7 +794,7 @@ def time_inverse(ysr, v=False):
 
 
 @fx
-def perturb(ysr, num_aug=None, v=False):
+def perturb(ysr, n=None, v=False):
     augmetors = [
         gaussian_noise(snr=(5, 10), v=v),
         sfx_noise(snr=(5, 10), v=v),
@@ -808,7 +808,19 @@ def perturb(ysr, num_aug=None, v=False):
         room_simulator(decay=(10, 20), v=v),
         bandpass(low=(100, 400), high=(1500, 4000), v=v),
     ]
-    return cf_(*choice(augmetors, size=num_aug or len(augmetors)))(ysr)
+    return cf_(*choice(augmetors, size=n or len(augmetors)))(ysr)
+
+
+@fx
+def perturb_nemo(ysr, v=False):
+    return cf_(
+        *shuffle(
+            [  # The same as TitaNet-L's augmentor
+                probify(p=0.5)(gaussian_noise(snr=(0, 15), v=v)),
+                probify(p=0.3)(time_stretch(rate=(0.95, 1.05), v=v)),
+            ]
+        )
+    )(ysr)
 
 
 def randsfx():

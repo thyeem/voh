@@ -89,20 +89,19 @@ class voh(nn.Module):
         else:
             self.stat = dmap(stat)
         self.dq = dmap(
+            loss=dmap(
+                t=dataq(self.conf.size_val),
+                v=dataq(self.conf.size_val),
+            ),
             pos=dmap(
-                t=dataQ(self.conf.size_val * self.conf.size_batch),
-                v=dataQ(self.conf.size_val * self.conf.size_batch),
+                t=dataq(self.conf.size_val * self.conf.size_batch),
+                v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataQ(self.conf.size_val * self.conf.size_batch**2),
-                v=dataQ(self.conf.size_val * self.conf.size_batch**2),
+                t=dataq(self.conf.size_val * self.conf.size_batch**2),
+                v=dataq(self.conf.size_val * self.conf.size_batch**2),
             ),
-            mine=dmap(
-                neg=dataQ(self.conf.size_mineq),
-                cutval=dataQ(self.conf.size_mineq),
-                th=dataQ(self.conf.size_mineq),
-            ),
-            loss=dmap(t=dataQ(self.conf.size_val), v=dataQ(self.conf.size_val)),
+            mine=dataq(self.conf.size_val),
         )
         self.ema = ema(alpha=self.stat.alpha)
         return self
@@ -247,7 +246,7 @@ class voh(nn.Module):
     def forward(self, x, mask=None):
         x = x.to(device=self.device)
         if mask is None:
-            mask = create_mask(x)
+            mask = create_mask(x, ipad=-1e9)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
@@ -279,15 +278,6 @@ class voh(nn.Module):
     # -----------
     # Training
     # -----------
-    @torch.no_grad()
-    def prepare(self, dl):
-        dl.train()
-        if not self.dq.mine.neg.data:
-            self.train()
-            size = self.dq.mine.neg.data.maxlen // (self.conf.size_batch**2)
-            for _ in tracker(range(size), "preparing"):
-                self.update_stat(*self.next(dl))
-
     def next(self, dl):
         return map(
             cf_(f_(F.normalize, dim=-1), self),
@@ -296,56 +286,44 @@ class voh(nn.Module):
 
     def get_trained(self):
         dl = self.dl()  # dataloader of (training + validation) set
+        dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
         with dl:
-            self.prepare(dl)
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 self.train()
                 self.update_lr(sched=True)
                 self.validate(dl, sched=True)
                 anchor, positive, negative = self.next(dl)
                 self.update_stat(anchor, positive, negative)
-                loss = self.get_loss(anchor, positive, negative)
+                i, j = self.mine(anchor, negative, dl)
+                loss = self.get_loss(anchor[i], positive[i], negative[j])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
                 self.optim.step()
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
                 self.it += 1
-        self.checkpoint()
+                if self.on_interval(g // 100):
+                    self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
-        if self.training:  # online hard mining
-            i, j = self.mine(anchor, negative)
-            anchor = anchor[i]
-            positive = positive[i]
-            negative = negative[j]
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
-        # return F.relu(an - torch.cos(self.conf.margin + torch.acos(ap))).mean()
-        return F.relu(torch.acos(ap) - torch.acos(an) + self.conf.margin).mean()
+        return (self.conf.scale * F.relu(an - ap + self.conf.margin)).mean()
 
     @torch.no_grad()
     def mine(self, anchor, negative):
         """Find the indices of challenging negatives based on distribution."""
+        self.train()
         S = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
-        threshold = 1 - self.conf.ratio_hard
-        cutval = self.dq.mine.neg.percentile(100 * threshold)
-        q = (S > cutval).nonzero()
-        while not len(q):
-            if threshold <= 0.5:  # ensure non-zero mask
-                q = (S == torch.max(S)).nonzero()
-                break
-            threshold -= 0.01
-            cutval = self.dq.mine.neg.percentile(100 * threshold)
-            q = (S > cutval).nonzero()
-        self.dq.mine.cutval.update(cutval)
-        self.dq.mine.th.update(threshold)
+        q = S.nonzero()
 
-        # (only batch size) in descending order based on their values
-        q = q[torch.argsort(S[q[:, 0], q[:, 1]], descending=True)]
-        return q[: self.conf.size_batch, 0], q[: self.conf.size_batch, 1]
+        # in descending order based on their values
+        o = q[torch.argsort(S[q[:, 0], q[:, 1]], descending=True)]
+        u = int(S.numel() * self.conf.ratio_hard)
+        self.dq.mine.update(S[o[u - 1, 0], o[u - 1, 1]].item())
+        return o[:u, 0], o[:u, 1]
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
@@ -356,17 +334,13 @@ class voh(nn.Module):
         if self.training:
             self.dq.pos.t.update(ap)
             self.dq.neg.t.update(an)
-            self.dq.mine.neg.update(an)
         else:
             self.dq.pos.v.update(ap)
             self.dq.neg.v.update(an)
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
-        if sched and (
-            not self.on_interval(self.conf.int_val)
-            or (self.it <= int(self.conf.steps * self.conf.ratio_warmup))
-        ):  # turn off validation on warmup stage
+        if sched and not self.on_interval(self.conf.int_val):
             return
         self.eval()
         dl.eval()
@@ -406,17 +380,8 @@ class voh(nn.Module):
             size_batch=self.conf.size_batch,
         )
         return _dataloader(
-            _dataset(  # training dataset
-                self.conf.ds_train,
-                prob_aug=self.conf.prob_aug,
-                num_aug=self.conf.num_aug,
-                **shared,
-            ),
-            _dataset(  # validation dataset
-                self.conf.ds_val,
-                prob_aug=0,
-                **shared,
-            ),
+            _dataset(self.conf.ds_train, **shared),  # training
+            _dataset(self.conf.ds_val, augment=False, **shared),  # validation
             num_workers=self.conf.num_workers,
         )
 
@@ -424,16 +389,15 @@ class voh(nn.Module):
         if sched and not self.on_interval(self.conf.size_val):
             return
         self.stat.loss.t = self.ema(self.stat.loss.t, self.dq.loss.t.median)
-        ths = flat(self.dq.mine.th.percentile([25, 50, 75]))
         log = [
             (
                 [
-                    "Step",
+                    "STEP",
                     "LR",
-                    "Hard cutoff",
-                    "Pos MED/MAD",
-                    "Neg MED/MAD",
-                    "Loss(EMA) >= min",
+                    "HARD-CUT",
+                    "POSITIVES",
+                    "NEGATIVES",
+                    "LOSS(EMA) >= MIN",
                 ]
                 if self.on_interval(5 * self.conf.size_val)
                 else []
@@ -441,15 +405,15 @@ class voh(nn.Module):
             [
                 f"{self.it:06d}",
                 f"{self._lr:.8f}",
-                f"{self.dq.mine.cutval.median:.4f}/{self.dq.mine.cutval.mad:.4f}",
+                f"{self.dq.mine.median:.4f}/{self.dq.mine.mad:.4f}",
                 f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
                 f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
                 f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
             ],
             [
-                "val",
+                "VAL",
                 "-",
-                "/".join(map(lambda x: f"{x:.2f}", ths)),
+                "-",
                 f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
                 f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
                 f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"

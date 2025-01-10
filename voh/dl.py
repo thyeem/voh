@@ -20,14 +20,12 @@ class _dataset:
         sr=16000,
         max_frames=400,
         size_batch=1,
-        prob_aug=0,
-        num_aug=1,
+        augment=True,
     ):
         super().__init__()
         self.db = read_json(path)
         self.size_batch = size_batch
-        self.prob_aug = prob_aug
-        self.augmentor = perturb(num_aug=num_aug)  # audio augmentor
+        self.augmetor = perturb_nemo if augment else id
         self.mel_fb = filterbank(  # log Mel-filterbank energies
             n_mels=n_mels,
             sr=sr,
@@ -38,7 +36,7 @@ class _dataset:
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                pad_,  # collate-fn
+                f_(pad_, ipad=-1e9),  # collate-fn
                 zip(
                     *map(
                         self.processor,  # filterbank + norm-channel + perturb
@@ -51,12 +49,8 @@ class _dataset:
     def processor(self, triad):
         anchor, positive, negative = map(readwav, triad)
         return map(
-            self.mel_fb,  # filterbank + norm-channel
-            (
-                anchor,
-                self.augmentor(anchor) if rand() < self.prob_aug else positive,
-                probify(p=self.prob_aug)(self.augmentor)(negative),
-            ),  # audio augmentation
+            self.mel_fb,
+            (anchor, self.augmetor(positive), self.augmetor(negative)),
         )
 
 
