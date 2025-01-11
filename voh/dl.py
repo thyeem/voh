@@ -24,6 +24,7 @@ class _dataset:
     ):
         super().__init__()
         self.db = read_json(path)
+        self.max_frames = max_frames
         self.size_batch = size_batch
         self.augmetor = perturb_nemo if augment else id
         self.mel_fb = filterbank(  # log Mel-filterbank energies
@@ -36,7 +37,7 @@ class _dataset:
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                f_(pad_, ipad=-1e9),  # collate-fn
+                f_(pad_, max_frames=self.max_frames),  # collate-fn
                 self.triads(),  # list of triplets with batch size
             )
             yield anchors, positives, negatives

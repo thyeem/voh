@@ -246,7 +246,7 @@ class voh(nn.Module):
     def forward(self, x, mask=None):
         x = x.to(device=self.device)
         if mask is None:
-            mask = create_mask(x, ipad=-1e9)
+            mask = create_mask(x, max_frames=self.conf.max_frames)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
