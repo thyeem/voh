@@ -172,9 +172,9 @@ def filterbank(
 
 
 @torch.no_grad()
-def normalize_channel(x):
-    mean = x.mean(dim=1, keepdim=True)
-    std = x.std(dim=1, keepdim=True)
+def normalize_channel(x, dim=1):
+    mean = x.mean(dim=dim, keepdim=True)
+    std = x.std(dim=dim, keepdim=True)
     return (x - mean) / (std + 1e-8)
 
 

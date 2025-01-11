@@ -37,14 +37,17 @@ class _dataset:
         while True:
             anchors, positives, negatives = map(
                 f_(pad_, ipad=-1e9),  # collate-fn
-                zip(
-                    *map(
-                        self.processor,  # filterbank + norm-channel + perturb
-                        zip(*triplet(self.db, size=self.size_batch)),
-                    ),
-                ),
+                self.triads(),  # list of triplets with batch size
             )
             yield anchors, positives, negatives
+
+    def triads(self):
+        return zip(
+            *map(
+                self.processor,  # filterbank + norm-channel + perturb
+                zip(*triplet(self.db, size=self.size_batch)),
+            ),
+        )
 
     def processor(self, triad):
         anchor, positive, negative = map(readwav, triad)

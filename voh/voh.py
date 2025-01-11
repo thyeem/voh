@@ -278,12 +278,6 @@ class voh(nn.Module):
     # -----------
     # Training
     # -----------
-    def next(self, dl):
-        return map(
-            cf_(f_(F.normalize, dim=-1), self),
-            next(dl),
-        )
-
     def get_trained(self):
         dl = self.dl()  # dataloader of (training + validation) set
         dl.train()
@@ -293,13 +287,13 @@ class voh(nn.Module):
                 self.train()
                 self.update_lr(sched=True)
                 self.validate(dl, sched=True)
-                anchor, positive, negative = self.next(dl)
+                anchor, positive, negative = map(self, next(dl))
                 self.update_stat(anchor, positive, negative)
                 i = self.mine(anchor, positive, negative)
                 loss = self.get_loss(anchor[i], positive[i], negative[i])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=4.0)
                 self.optim.step()
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
@@ -310,8 +304,11 @@ class voh(nn.Module):
     def get_loss(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
-        loss = (an - ap).clamp(min=0) + self.conf.margin
-        return self.conf.scale * loss.mean()
+        dp = torch.norm(anchor - positive, dim=-1)
+        dn = torch.norm(anchor - negative, dim=-1)
+        L2 = torch.norm(anchor) + torch.norm(positive) + torch.norm(negative)
+        loss = 10 * F.relu(an - ap + self.conf.margin) + torch.exp(dp - dn)
+        return loss.mean() + 0.02 * L2
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
@@ -344,7 +341,7 @@ class voh(nn.Module):
         self.eval()
         dl.eval()
         for _ in tracker(range(self.conf.size_val), "validation"):
-            anchor, positive, negative = self.next(dl)
+            anchor, positive, negative = map(self, next(dl))
             self.update_stat(anchor, positive, negative)
             self.dq.loss.v.update(self.get_loss(anchor, positive, negative).item())
         self.stat.loss.v = self.ema(self.stat.loss.v, self.dq.loss.v.median)
@@ -393,7 +390,7 @@ class voh(nn.Module):
                 [
                     "STEP",
                     "LR",
-                    "SIMILARITY",
+                    "d-SIMILARITY",
                     "POSITIVES",
                     "NEGATIVES",
                     "LOSS(EMA) >= MIN",
