@@ -31,6 +31,7 @@ conf = dmap(
     seed=(META, None),  # random seed
     margin=(META, 0.3),  # size of additive angular margin
     scale=(META, 10),  # temperature scaling of loss
+    lam=(META, 0.2),  # L2 regularization lambda coefficient
     weight_decay=(META, 1e-4),  # optimizer's weight decay
     momentum=(META, 0.9),  # optimizer's momentum
     betas=(META, (0.9, 0.999)),  # optimizer's betas

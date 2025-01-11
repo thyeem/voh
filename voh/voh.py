@@ -250,7 +250,6 @@ class voh(nn.Module):
     def forward(self, x):
         x = x.to(device=self.device)
         mask = create_mask(x, ipad=self.ipad)
-        # x.masked_fill(x == self.ipad, 0)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
@@ -307,11 +306,9 @@ class voh(nn.Module):
     def get_loss(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
-        dp = torch.norm(anchor - positive, dim=-1)
-        dn = torch.norm(anchor - negative, dim=-1)
         L2 = torch.norm(anchor) + torch.norm(positive) + torch.norm(negative)
-        loss = 10 * F.relu(an - ap + self.conf.margin) + torch.exp(dp - dn)
-        return loss.mean() + 0.02 * L2
+        loss = F.relu(an - ap + self.conf.margin)
+        return self.conf.scale * loss.mean() + self.conf.lam * L2
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):

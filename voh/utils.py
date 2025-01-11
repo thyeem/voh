@@ -834,7 +834,7 @@ def perturb(ysr, n=None, v=False):
 
 
 @fx
-def perturb_nemo(ysr, v=False):
+def perturb_tiny(ysr, v=False):
     return cf_(
         *shuffle(
             [  # The same as TitaNet-L's augmentor
