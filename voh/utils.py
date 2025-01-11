@@ -72,35 +72,48 @@ class dataq:
                 return
             self.data.append(v)
 
+    def if_empty(f):
+        def wrapper(self, *args, **kwargs):
+            if not self.data:
+                return float("nan")
+            return f(self, *args, **kwargs)
+
+        return wrapper
+
     @property
+    @if_empty
     def median(self):
-        if not self.data:
-            return float("nan")
         return np.median(self.data)
 
     @property
+    @if_empty
     def mad(self):
-        if not self.data:
-            return float("nan")
         median = self.median
         return np.median(np.abs(np.array(self.data) - median))
 
+    @if_empty
+    def percentile(self, q):
+        return np.percentile(self.data, q)
+
     @property
+    @if_empty
     def mean(self):
-        if not self.data:
-            return float("nan")
         return np.mean(self.data)
 
     @property
+    @if_empty
     def std(self):
-        if not self.data:
-            return float("nan")
         return np.std(self.data)
 
-    def percentile(self, q):
-        if not self.data:
-            return float("nan")
-        return np.percentile(self.data, q)
+    @property
+    @if_empty
+    def min(self):
+        return np.min(self.data)
+
+    @property
+    @if_empty
+    def max(self):
+        return np.max(self.data)
 
 
 @fx
@@ -816,8 +829,8 @@ def perturb_nemo(ysr, v=False):
     return cf_(
         *shuffle(
             [  # The same as TitaNet-L's augmentor
-                probify(p=0.1)(gaussian_noise(snr=(0, 15), v=v)),
-                probify(p=0.1)(time_stretch(rate=(0.95, 1.05), v=v)),
+                probify(p=0.2)(gaussian_noise(snr=(0, 15), v=v)),
+                probify(p=0.2)(time_stretch(rate=(0.95, 1.05), v=v)),
             ]
         )
     )(ysr)

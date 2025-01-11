@@ -308,19 +308,18 @@ class voh(nn.Module):
                     self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
-        ap = F.pairwise_distance(anchor, positive)
-        an = F.pairwise_distance(anchor, negative)
-        adaptive_margin = self.conf.margin + (ap - an).clamp(min=0)
-        loss = F.relu(ap - an + adaptive_margin)
+        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        an = F.cosine_similarity(anchor, negative, dim=-1)
+        loss = (an - ap).clamp(min=0) + self.conf.margin
         return self.conf.scale * loss.mean()
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
         self.train()
-        ap = F.pairwise_distance(anchor, positive)
-        an = F.pairwise_distance(anchor, negative)
-        D = an - ap
+        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        an = F.cosine_similarity(anchor, negative, dim=-1)
+        D = ap - an
         i = (D < self.conf.margin).nonzero().squeeze(-1)
         if not len(i):
             i = (D == torch.min(D)).nonzero().squeeze(-1)
@@ -329,8 +328,8 @@ class voh(nn.Module):
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
-        ap = F.pairwise_distance(anchor, positive).tolist()
-        an = F.pairwise_distance(anchor, negative).tolist()
+        ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
+        an = F.cosine_similarity(anchor, negative, dim=-1).tolist()
         if self.training:
             self.dq.pos.t.update(ap)
             self.dq.neg.t.update(an)
@@ -394,7 +393,7 @@ class voh(nn.Module):
                 [
                     "STEP",
                     "LR",
-                    "d-DIST",
+                    "SIMILARITY",
                     "POSITIVES",
                     "NEGATIVES",
                     "LOSS(EMA) >= MIN",
@@ -413,7 +412,7 @@ class voh(nn.Module):
             [
                 "VAL",
                 "-",
-                "-",
+                f"{self.dq.mine.min:.4f}/{self.dq.mine.max:.4f}",
                 f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
                 f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
                 f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
