@@ -21,7 +21,7 @@ class _dataset:
         max_frames=400,
         size_batch=1,
         augment=True,
-        ipad=float("-inf"),
+        ipad=0,
     ):
         super().__init__()
         self.db = read_json(path)
@@ -30,11 +30,12 @@ class _dataset:
         self.max_frames = max_frames
         self.size_batch = size_batch
         self.augment = augment
+        self.ipad = ipad
 
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                f_(pad_, ipad=ipad),  # collate-fn
+                f_(pad_, ipad=self.ipad),  # collate-fn
                 self.triads(),  # list of triplets with batch size
             )
             yield anchors, positives, negatives

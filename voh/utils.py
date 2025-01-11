@@ -209,8 +209,8 @@ def pad_(ts, max_frames=None, ipad=0):
     padded = []
     for t in ts:
         T = t.size(-1)
-        if T < L:
-            o = torch.full((t.size(0), L), ipad, dtype=t.dtype, device=t.device)
+        if T <= L:
+            o = torch.full((t.size(0), L), ipad, device=t.device)
             o[..., :T] = t
         else:
             o = t[..., :L].clone()

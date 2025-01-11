@@ -199,7 +199,7 @@ class voh(nn.Module):
 
     @property
     def ipad(self):
-        return float("-inf")
+        return -1e10
 
     @property
     def summary(self):
@@ -248,29 +248,25 @@ class voh(nn.Module):
         return self.name if hasattr(self, "name") else ""
 
     def forward(self, x):
-        x, mask = get_mask(x)
+        x = x.to(device=self.device)
+        mask = create_mask(x, ipad=self.ipad)
+        # x.masked_fill(x == self.ipad, 0)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
         )(x)
 
-    def get_mask(self, x):
-        x = x.to(device=self.device)
-        mask = create_mask(x, ipad=self.ipad)
-        x.masked_fill(x == self.ipad, 0)
-        return x, mask
-
     @torch.no_grad()
-    def fb(self, f):
-        """Load a given wav file in forms of log Mel-filterbank energies"""
+    def read(self, f):
+        """Load a given audio in forms of log Mel-filterbank energies tensor."""
         return cf_(
-            f_(pad_, ipad=self.ipad),
             ob(_.to)(device=self.device),
             ob(_.unsqueeze)(0),
             filterbank(
                 n_mels=self.conf.num_mel_filters,
                 sr=self.conf.samplerate,
                 max_frames=self.conf.max_frames,
+                norm_channel=True,
             ),
             readwav,
         )(f)
@@ -278,7 +274,7 @@ class voh(nn.Module):
     @torch.no_grad()
     def embed(self, f):
         self.eval()
-        return self(self.fb(f))
+        return self(self.read(f))
 
     @torch.no_grad()
     def cosim(self, x, y):
@@ -307,8 +303,6 @@ class voh(nn.Module):
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
                 self.it += 1
-                if self.on_interval(g // 100):
-                    self.checkpoint()
 
     def get_loss(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
