@@ -188,25 +188,34 @@ def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
 
 
 @torch.no_grad()
-def create_mask(x, max_frames=None, ipad=-1e9):
+def create_mask(x, max_frames=None, ipad=0):
     """Creates a mask based on a given input: dim of (B, 1, T)"""
-    num_frames = torch.any(x != ipad, dim=1).sum(dim=-1)
+    num_frames = torch.any(x != ipad, dim=1).sum(dim=-1)  # (B,)
     T = torch.max(num_frames).item() if max_frames is None else max_frames
     num_frames = torch.clamp(num_frames, max=T)
     B = num_frames.size(0)
-    return (
+    # For each batch element, indices < num_frames are True
+    return (  # (B, T) -> (B, 1, T)
         torch.arange(T, device=x.device).expand(B, T) < num_frames.unsqueeze(1)
     ).unsqueeze(1)
 
 
-def pad_(o, max_frames=None, ipad=-1e9):
-    """Pad along the last ``dim`` so that it's the same dimenstion.
-    Assueming that ``o`` has dimensions of ``(B, C, T)``.
+def pad_(ts, max_frames=None, ipad=0):
+    """Pad along the last ``dim`` so that they all have the same dimension.
+    Assume that ``ts`` has a dimension of ``(B, C, T)``,
+    where B for batches, C for channels, T for time frames.
     """
-    L = max(x.size(-1) for x in o) if max_frames is None else max_frames
-    return torch.stack(
-        [F.pad(x, (0, L - x.size(-1)), value=ipad).squeeze() for x in o],
-    )
+    L = max(t.size(-1) for t in ts) if max_frames is None else max_frames
+    padded = []
+    for t in ts:
+        T = t.size(-1)
+        if T < L:
+            o = torch.full((t.size(0), L), ipad, dtype=t.dtype, device=t.device)
+            o[..., :T] = t
+        else:
+            o = t[..., :L].clone()
+        padded.append(o)
+    return torch.stack(padded, dim=0)
 
 
 @fx

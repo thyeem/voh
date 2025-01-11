@@ -21,23 +21,20 @@ class _dataset:
         max_frames=400,
         size_batch=1,
         augment=True,
+        ipad=float("-inf"),
     ):
         super().__init__()
         self.db = read_json(path)
+        self.n_mels = n_mels
+        self.sr = sr
         self.max_frames = max_frames
         self.size_batch = size_batch
-        self.augmetor = perturb_nemo if augment else id
-        self.mel_fb = filterbank(  # log Mel-filterbank energies
-            n_mels=n_mels,
-            sr=sr,
-            max_frames=max_frames,
-            norm_channel=True,
-        )
+        self.augment = augment
 
     def __iter__(self):
         while True:
             anchors, positives, negatives = map(
-                f_(pad_, max_frames=self.max_frames),  # collate-fn
+                f_(pad_, ipad=ipad),  # collate-fn
                 self.triads(),  # list of triplets with batch size
             )
             yield anchors, positives, negatives
@@ -51,10 +48,16 @@ class _dataset:
         )
 
     def processor(self, triad):
+        augmetor = perturb_nemo if self.augment else id
         anchor, positive, negative = map(readwav, triad)
         return map(
-            self.mel_fb,
-            (anchor, self.augmetor(positive), self.augmetor(negative)),
+            filterbank(  # log Mel-filterbank energies
+                n_mels=self.n_mels,
+                sr=self.sr,
+                max_frames=self.max_frames,
+                norm_channel=True,  # normalize by channel
+            ),
+            (anchor, augmetor(positive), augmetor(negative)),
         )
 
 

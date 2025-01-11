@@ -198,6 +198,10 @@ class voh(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
     @property
+    def ipad(self):
+        return float("-inf")
+
+    @property
     def summary(self):
         return dmap(
             model=self.name,
@@ -243,28 +247,33 @@ class voh(nn.Module):
     def __repr__(self):
         return self.name if hasattr(self, "name") else ""
 
-    def forward(self, x, mask=None):
-        x = x.to(device=self.device)
-        if mask is None:
-            mask = create_mask(x, max_frames=self.conf.max_frames)
+    def forward(self, x):
+        x, mask = get_mask(x)
         return cf_(
             f_(self.decoder, mask),
             f_(self.encoder, mask),
         )(x)
 
+    def get_mask(self, x):
+        x = x.to(device=self.device)
+        mask = create_mask(x, ipad=self.ipad)
+        x.masked_fill(x == self.ipad, 0)
+        return x, mask
+
     @torch.no_grad()
     def fb(self, f):
         """Load a given wav file in forms of log Mel-filterbank energies"""
-        return (
+        return cf_(
+            f_(pad_, ipad=self.ipad),
+            ob(_.to)(device=self.device),
+            ob(_.unsqueeze)(0),
             filterbank(
-                readwav(f),
                 n_mels=self.conf.num_mel_filters,
                 sr=self.conf.samplerate,
                 max_frames=self.conf.max_frames,
-            )
-            .unsqueeze(0)
-            .to(device=self.device)
-        )
+            ),
+            readwav,
+        )(f)
 
     @torch.no_grad()
     def embed(self, f):
@@ -374,6 +383,7 @@ class voh(nn.Module):
             sr=self.conf.samplerate,
             max_frames=self.conf.max_frames,
             size_batch=self.conf.size_batch,
+            ipad=self.ipad,
         )
         return _dataloader(
             _dataset(self.conf.ds_train, **shared),  # training
