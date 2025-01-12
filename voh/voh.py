@@ -320,10 +320,9 @@ class voh(nn.Module):
             dim=-1,
         )
         D = ap - an
-        th = dataq(D.numel(), D.tolist()).percentile(100 * self.conf.hard_ratio)
-        q = (D < th).nonzero().squeeze(-1)
+        q = (D < self.conf.margin).nonzero()
         if not len(q):
-            q = (D == torch.min(D)).nonzero().squeeze(-1)
+            q = (D == torch.min(D)).nonzero()
         self.dq.mine.update(D.tolist())
         return q[:, 0], q[:, 1]
 
