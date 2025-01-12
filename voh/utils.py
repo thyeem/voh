@@ -133,7 +133,6 @@ def filterbank(
     fmin=0,
     fmax=None,
     max_frames=None,
-    norm_channel=True,
 ):
     """Generate log of Mel-filterbank energies from a given wavfile.
     -----------------------------
@@ -162,20 +161,12 @@ def filterbank(
         fmax=fmax or sr // 2,
     )  # (C, T) = (n_mels, num_frames)
     return cf_(
-        normalize_channel if norm_channel else id,
         _[:, :max_frames] if max_frames else id,
         torch.log,
         torch.Tensor.float,
         torch.from_numpy,
         _ + 1e-10,
     )(y)
-
-
-@torch.no_grad()
-def normalize_channel(x, dim=1):
-    mean = x.mean(dim=dim, keepdim=True)
-    std = x.std(dim=dim, keepdim=True)
-    return (x - mean) / (std + 1e-8)
 
 
 @torch.no_grad()

@@ -14,6 +14,7 @@ def pad_conv(size_kernel, dilation=1):
 class Encoder(nn.Module):
     def __init__(self, conf):
         super().__init__()
+        self.ln = LayerNorm(conf.size_in_enc)
         self.prolog = Context(
             conf.size_in_enc,
             conf.size_hidden_enc,
@@ -48,7 +49,7 @@ class Encoder(nn.Module):
             f_(self.epilog, mask),  # (B, C'out, T)
             cf__(*[f_(b, mask) for b in self.blocks]),  # (B, C'hidden, T)
             f_(self.prolog, mask),  # (B, C'hidden, T)
-            # (B, C'in, T)
+            self.ln,  # (B, C'in, T)
         )(x)
 
 
@@ -106,7 +107,6 @@ class RepeatR(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
-        self.ln = LayerNorm(size_out, eps=0.001)
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -114,7 +114,6 @@ class RepeatR(nn.Module):
         out = cf_(
             self.dropout,
             self.relu,
-            self.ln,
             f_(self.tsc, mask),
         )(x)
         return out
@@ -137,7 +136,6 @@ class Context(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
-        self.ln = LayerNorm(size_out, eps=0.001)
         self.se = SqueezeExcite(size_out, reduction=reduction)
         self.relu = nn.ReLU(inplace=True) if end else None
 
@@ -145,7 +143,6 @@ class Context(nn.Module):
         out = cf_(
             self.relu if self.relu else id,
             self.se,
-            self.ln,
             f_(self.tsc, mask),
         )(x)
         return out
@@ -156,13 +153,13 @@ class Residual(nn.Module):
 
     def __init__(self, size_in, size_out):
         super().__init__()
+        self.ln = LayerNorm(size_in)
         self.conv = MaskedConv1d(size_in, size_out, 1, bias=False)
-        self.ln = LayerNorm(size_out, eps=0.001)
 
     def forward(self, mask, x):
         out = cf_(
-            self.ln,
             f_(self.conv, mask),  # pointwise-conv
+            self.ln,
         )(x)
         return out
 
@@ -181,6 +178,7 @@ class TimeSeparable(nn.Module):
         if padding is None:
             padding = pad_conv(size_kernel)
 
+        self.ln = LayerNorm(size_in)
         self.depthwise = MaskedConv1d(
             size_in,
             size_in,
@@ -201,6 +199,7 @@ class TimeSeparable(nn.Module):
             # time-separable-conv :: 1d-depthwise-conv -> pointwise-conv
             f_(self.pointwise, mask),
             f_(self.depthwise, mask),
+            self.ln,
         )(x)
         return out
 
@@ -214,6 +213,7 @@ class SqueezeExcite(nn.Module):
             channels % reduction == 0,
             f"Error, SE({channels}) must be divisible by {reduction}",
         )
+        self.ln = LayerNorm(channels)
         self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
         self.relu = nn.ReLU(inplace=True)
         self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
@@ -228,6 +228,7 @@ class SqueezeExcite(nn.Module):
             self.fc1,  # (B, 1, C // reduction)
             ob(_.transpose)(1, -1),  # (B, 1, C)
             ob(_.mean)(dim=-1, keepdim=True),  # (B, C, 1)
+            self.ln,
         )(x)
         return out
 
@@ -259,15 +260,16 @@ class MaskedConv1d(nn.Module):
 
 
 class LayerNorm(nn.Module):
-    def __init__(self, num_channels, eps=1e-5):
+    def __init__(self, num_channels):
         super().__init__()
-        self.ln = nn.LayerNorm(num_channels, eps=eps)
+        self.ln = nn.LayerNorm(num_channels)
 
     def forward(self, x):
-        return cf_(  # back to (B, T)
+        return cf_(
             ob(_.transpose)(1, -1),  # (B, C, T)
             self.ln,  # nn.LayerNorm along C
             ob(_.transpose)(1, -1),  # (B, T, C)
+            # supposed to be (B, C, T)
         )(x)
 
 
@@ -276,9 +278,11 @@ class Decoder(nn.Module):
         super().__init__()
         self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
+        self.ln = LayerNorm(conf.size_out_dec)
 
     def forward(self, mask, x):
         return cf_(
+            self.ln,
             self.emb,  # (B, E)
             f_(self.pool, mask),  # (B, 2C, 1)
         )(x)
@@ -318,7 +322,7 @@ class AttentivePool(nn.Module):
 class Embedding(nn.Module):
     def __init__(self, size_in, size_out):
         super().__init__()
-        self.ln = LayerNorm(size_in, eps=1e-5)
+        self.ln = LayerNorm(size_in)
         self.conv = nn.Conv1d(size_in, size_out, 1)
 
     def forward(self, x):
@@ -344,6 +348,7 @@ class TDNN(nn.Module):
         super().__init__()
         if padding is None:
             padding = pad_conv(size_kernel, dilation)
+        self.ln = LayerNorm(size_in)
         self.conv = nn.Conv1d(
             size_in,
             size_out,
@@ -353,12 +358,11 @@ class TDNN(nn.Module):
             padding=padding,
         )
         self.relu = nn.ReLU(inplace=True)
-        self.ln = LayerNorm(size_out, eps=1e-5)
 
     def forward(self, x):
         out = cf_(
-            self.ln,
             self.relu,
             self.conv,
+            self.ln,
         )(x)
         return out

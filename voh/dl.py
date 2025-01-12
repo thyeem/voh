@@ -56,7 +56,6 @@ class _dataset:
                 n_mels=self.n_mels,
                 sr=self.sr,
                 max_frames=self.max_frames,
-                norm_channel=True,  # normalize by channel
             ),
             (anchor, augmetor(positive), augmetor(negative)),
         )

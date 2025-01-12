@@ -101,7 +101,7 @@ class voh(nn.Module):
                 t=dataq(self.conf.size_val * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
-            mine=dataq(self.conf.size_val * self.conf.size_batch),
+            mine=dataq(self.conf.size_val * self.conf.size_batch**2),
         )
         self.ema = ema(alpha=self.stat.alpha)
         return self
@@ -265,7 +265,6 @@ class voh(nn.Module):
                 n_mels=self.conf.num_mel_filters,
                 sr=self.conf.samplerate,
                 max_frames=self.conf.max_frames,
-                norm_channel=True,
             ),
             readwav,
         )(f)
@@ -293,8 +292,8 @@ class voh(nn.Module):
                 self.validate(dl, sched=True)
                 anchor, positive, negative = map(self, next(dl))
                 self.update_stat(anchor, positive, negative)
-                i = self.mine(anchor, positive, negative)
-                loss = self.get_loss(anchor[i], positive[i], negative[i])
+                i, j = self.mine(anchor, positive, negative)
+                loss = self.get_loss(anchor[i], positive[i], negative[j])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=4.0)
@@ -307,21 +306,26 @@ class voh(nn.Module):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
         L2 = torch.norm(anchor) + torch.norm(positive) + torch.norm(negative)
-        loss = F.relu(an - ap + self.conf.margin)
+        loss = torch.clamp(an - ap + self.conf.margin, min=0)
         return self.conf.scale * loss.mean() + self.conf.lam * L2
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
         self.train()
-        ap = F.cosine_similarity(anchor, positive, dim=-1)
-        an = F.cosine_similarity(anchor, negative, dim=-1)
+        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
+        an = F.cosine_similarity(
+            anchor.unsqueeze(1),
+            negative.unsqueeze(0),
+            dim=-1,
+        )
         D = ap - an
-        i = (D < self.conf.margin).nonzero().squeeze(-1)
-        if not len(i):
-            i = (D == torch.min(D)).nonzero().squeeze(-1)
+        th = dataq(D.numel(), D.tolist()).percentile(100 * self.conf.hard_ratio)
+        q = (D < th).nonzero().squeeze(-1)
+        if not len(q):
+            q = (D == torch.min(D)).nonzero().squeeze(-1)
         self.dq.mine.update(D.tolist())
-        return i
+        return q[:, 0], q[:, 1]
 
     @torch.no_grad()
     def update_stat(self, anchor, positive, negative):
