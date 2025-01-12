@@ -259,15 +259,14 @@ class MaskedConv1d(nn.Module):
         return self.conv(x) * mask
 
 
-class LayerNorm(nn.Module):
-    def __init__(self, num_channels):
-        super().__init__()
-        self.ln = nn.LayerNorm(num_channels)
+class LayerNorm(nn.LayerNorm):
+    def __init__(self, channels):
+        super().__init__(normalized_shape=channels)
 
     def forward(self, x):
         return cf_(
             ob(_.transpose)(1, -1),  # (B, C, T)
-            self.ln,  # nn.LayerNorm along C
+            super().forward,  # nn.LayerNorm along C
             ob(_.transpose)(1, -1),  # (B, T, C)
             # supposed to be (B, C, T)
         )(x)
