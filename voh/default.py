@@ -32,6 +32,7 @@ conf = dmap(
     margin=(META, 0.3),  # size of additive angular margin
     scale=(META, 10),  # temperature scaling of loss
     lam=(META, 0.2),  # L2 regularization lambda coefficient
+    hard_ratio=(META, 0.1),  # ratio of hard samples
     weight_decay=(META, 1e-4),  # optimizer's weight decay
     momentum=(META, 0.9),  # optimizer's momentum
     betas=(META, (0.9, 0.999)),  # optimizer's betas

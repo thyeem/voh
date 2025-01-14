@@ -305,9 +305,12 @@ class voh(nn.Module):
     def get_loss(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
-        L2 = torch.norm(anchor) + torch.norm(positive) + torch.norm(negative)
+        L2 = anchor.norm() + positive.norm() + negative.norm()
         loss = torch.clamp(an - ap + self.conf.margin, min=0)
-        return self.conf.scale * loss.mean() + self.conf.lam * L2
+        return (
+            self.conf.scale * loss.mean()  # triplet loss
+            + self.conf.lam * L2  # L2 regularization
+        )
 
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
@@ -320,9 +323,11 @@ class voh(nn.Module):
             dim=-1,
         )
         D = ap - an
-        q = (D < self.conf.margin).nonzero()
+        ansim = dataq(D.numel(), an.tolist())
+        cutval = ansim.percentile(100 * (1 - self.conf.hard_ratio))
+        q = torch.logical_and(an > cutval, D < self.conf.margin).nonzero()
         if not len(q):
-            q = (D == torch.min(D)).nonzero()
+            q = (D == torch.max(D)).nonzero()
         self.dq.mine.update(D.tolist())
         return q[:, 0], q[:, 1]
 
