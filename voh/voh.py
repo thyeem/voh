@@ -341,7 +341,13 @@ class voh(nn.Module):
         hard_positives = torch.logical_and(
             ap < cutval(ap, self.conf.hard_ratio), D < self.conf.margin
         ).nonzero()
-        q = torch.cat([hard_negatives, hard_positives], dim=0)
+        q = torch.tensor(
+            list(
+                set(map(tuple, hard_negatives.tolist())).intersection(
+                    set(map(tuple, hard_positives.tolist()))
+                )
+            )
+        )
         if not len(q):
             q = (D == torch.min(D)).nonzero()
         self.dq.mine.update(D.tolist())
