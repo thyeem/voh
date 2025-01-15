@@ -283,8 +283,43 @@ class voh(nn.Module):
     # -----------
     # Training
     # -----------
+    @property
+    def tset(self):
+        return lazy(  # bulder of training dataset
+            _dataset,
+            self.conf.ds_train,
+            n_mels=self.conf.num_mel_filters,
+            sr=self.conf.samplerate,
+            max_frames=self.conf.max_frames,
+            size_batch=self.conf.size_batch,
+            ipad=self.ipad,
+        )
+
+    @property
+    def vset(self):
+        return lazy(  # builder of validation dataset
+            _dataset,
+            self.conf.ds_val,
+            n_mels=self.conf.num_mel_filters,
+            sr=self.conf.samplerate,
+            max_frames=self.conf.max_frames,
+            size_batch=self.conf.size_batch,
+            ipad=self.ipad,
+            augment=False,
+        )
+
+    @property
+    def dl(self):
+        self.guards(train=True)
+        return lazy(  # builder of training/validation dataset loader
+            _dataloader,
+            self.tset,
+            self.vset,
+            num_workers=self.conf.num_workers,
+        )
+
     def get_trained(self):
-        dl = self.dl()  # dataloader of (training + validation) set
+        dl = self.dl()
         dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
         with dl:
@@ -398,21 +433,6 @@ class voh(nn.Module):
         )
         for param_group in self.optim.param_groups:
             param_group["lr"] = self._lr
-
-    def dl(self):
-        self.guards(train=True)
-        shared = dict(  # shared keywords for dataset
-            n_mels=self.conf.num_mel_filters,
-            sr=self.conf.samplerate,
-            max_frames=self.conf.max_frames,
-            size_batch=self.conf.size_batch,
-            ipad=self.ipad,
-        )
-        return _dataloader(
-            _dataset(self.conf.ds_train, **shared),  # training
-            _dataset(self.conf.ds_val, augment=False, **shared),  # validation
-            num_workers=self.conf.num_workers,
-        )
 
     def log(self, sched=False):
         if sched and not self.on_interval(self.conf.size_val):

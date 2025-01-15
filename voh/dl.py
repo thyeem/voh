@@ -61,21 +61,6 @@ class _dataset:
         )
 
 
-class _safeiter:
-    """Thread-safe iterator wrapper for synchronized access."""
-
-    def __init__(self, iterator):
-        self.iterator = iterator
-        self.lock = threading.Lock()
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        with self.lock:
-            return next(self.iterator)
-
-
 class _dataloader:
     """A multiprocessing-based data loader for training and evaluation datasets.
     This supports dynamics switching between training and validation modes.
@@ -86,9 +71,9 @@ class _dataloader:
      eval | switch to validation mode, loading data from 'evaluation queue'.
     """
 
-    def __init__(self, trainset, evalset=None, num_workers=1, size_queue=32):
-        self.trainset = trainset
-        self.evalset = evalset
+    def __init__(self, tset, vset, num_workers=1, size_queue=32):
+        self.tset = tset  # training set builder
+        self.vset = vset  # validation set builder
         self.num_workers = num_workers
         self.trainq = mp.Queue(maxsize=size_queue)
         self.evalq = mp.Queue(maxsize=size_queue)
@@ -116,11 +101,13 @@ class _dataloader:
 
     def worker(self):
         def worker_thread():
+            trainset = iter(self.tset())
+            valset = iter(self.vset())
             while not self.abort.is_set():
                 mode = self.mode.value
-                dataset = self.trainset if mode else self.evalset
+                dataset = trainset if mode else valset
                 queue = self.trainq if mode else self.evalq
-                for data in _safeiter(iter(dataset)):
+                for data in dataset:
                     if self.abort.is_set():
                         return
                     if self.mode.value != mode:
