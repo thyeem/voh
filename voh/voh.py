@@ -315,19 +315,35 @@ class voh(nn.Module):
     @torch.no_grad()
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
+
+        def cutval(T, ratio):
+            return dataq(T.numel(), T.tolist()).percentile(100 * ratio)
+
         self.train()
-        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
+        ap = (
+            F.cosine_similarity(
+                anchor,
+                positive,
+                dim=-1,
+            )
+            .unsqueeze(1)
+            .expand(-1, len(positive))
+        )
         an = F.cosine_similarity(
             anchor.unsqueeze(1),
             negative.unsqueeze(0),
             dim=-1,
         )
         D = ap - an
-        ansim = dataq(D.numel(), an.tolist())
-        cutval = ansim.percentile(100 * (1 - self.conf.hard_ratio))
-        q = torch.logical_and(an > cutval, D < self.conf.margin).nonzero()
+        hard_negatives = torch.logical_and(
+            an > cutval(an, 1 - self.conf.hard_ratio), D < self.conf.margin
+        ).nonzero()
+        hard_positives = torch.logical_and(
+            ap < cutval(ap, self.conf.hard_ratio), D < self.conf.margin
+        ).nonzero()
+        q = torch.cat([hard_negatives, hard_positives], dim=0)
         if not len(q):
-            q = (D == torch.max(D)).nonzero()
+            q = (D == torch.min(D)).nonzero()
         self.dq.mine.update(D.tolist())
         return q[:, 0], q[:, 1]
 
