@@ -258,23 +258,26 @@ class voh(nn.Module):
         )(x)
 
     @torch.no_grad()
-    def read(self, f):
-        """Load a given audio in forms of log Mel-filterbank energies tensor."""
-        return cf_(
-            ob(_.to)(device=self.device),
-            ob(_.unsqueeze)(0),
+    def read(self, ysr):
+        """Load a given waveform in forms of log Mel-filterbank energies tensor."""
+        return (
             filterbank(
+                ysr,
                 n_mels=self.conf.num_mel_filters,
                 sr=self.conf.samplerate,
                 max_frames=self.conf.max_frames,
-            ),
-            readwav,
-        )(f)
+            )
+            .unsqueeze(0)
+            .to(device=self.device)
+        )
+
+    def readf(self, f):
+        return cf_(self.read, readwav)(f)
 
     @torch.no_grad()
-    def embed(self, f):
+    def embed(self, x, file=True):
         self.eval()
-        return self(self.read(f))
+        return cf_(self, (self.readf if file else self.read))(x)
 
     @torch.no_grad()
     def cosim(self, x, y):
@@ -506,19 +509,23 @@ class voh(nn.Module):
     def on_interval(self, val):
         return self.it and self.it % val == 0
 
+    def dist_pairs(self, size):
+        def waveform_pairs(mono):
+            return [mapl(readwav, p) for p in randpair(db, mono=mono, size=size)]
+
+        if not hasattr(self, "nfix") or not hasattr(self, "pfix"):
+            db = read_json(self.conf.ds_val)
+            self.nfix = waveform_pairs(False)
+            self.pfix = waveform_pairs(True)
+        return self.nfix, self.pfix
+
     @torch.no_grad()
     def dist(self, data=None, size=42, sched=False):
-
-        def t(pairs, mono=True):
-            cosims = []
-            for a, b in pairs:
-                cosim = self.cosim(a, b)
-                print(
-                    f"{cosim:.4f} {speaker_id(a):>16} {speaker_id(b):>16}",
-                    end="\r",
-                    flush=True,
-                )
-                cosims.append(cosim)
+        def t(pairs, desc, mono=True):
+            cosims = [
+                F.cosine_similarity(*map(f_(self.embed, file=False), pair)).item()
+                for pair in tracker(pairs, desc)
+            ]
             bins = [0.6, 0.7, 0.8, 0.9, 1.01]
             hist = Counter(bisect(bins, cosim) for cosim in cosims)
             pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
@@ -532,15 +539,8 @@ class voh(nn.Module):
         if sched and not self.on_interval(self.conf.int_dist):
             return
         self.eval()
-        if data:
-            nfix, pfix = data
-        else:
-            if not hasattr(self, "nfix") and not hasattr(self, "pfix"):
-                db = read_json(self.conf.ds_val)
-                self.nfix = randpair(db, mono=False, size=size)
-                self.pfix = randpair(db, mono=True, size=size)
-            nfix, pfix = self.nfix, self.pfix
-        n, p = t(nfix, False), t(pfix, True)
+        nfix, pfix = data if data else self.dist_pairs(size)
+        n, p = t(nfix, "n-distrib", False), t(pfix, "p-distrib", True)
         print(
             tabulate(
                 [
