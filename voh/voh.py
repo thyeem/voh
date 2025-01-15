@@ -1,6 +1,8 @@
 import logging
 import multiprocessing as mp
 import random
+from bisect import bisect
+from collections import Counter
 
 import torch
 from foc import *
@@ -482,3 +484,33 @@ class voh(nn.Module):
 
     def on_interval(self, val):
         return self.it and self.it % val == 0
+
+    @torch.no_grad()
+    def tasting(self):
+        self.eval()
+        cosims = []
+        for a, b in pairs:
+            cosim = self.cosim(a, b)
+            print(
+                f"{cosim:.4f} {speaker_id(a):>16} {speaker_id(b):>16}",
+                end="\r",
+                flush=True,
+            )
+            cosims.append(cosim)
+        bins = [0.6, 0.7, 0.8, 0.9, 1.01]
+        hist = Counter(bisect(bins, cosim) for cosim in cosims)
+        pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
+        cdf = scanl1(op.add, pdf)
+        median = np.median(cosims)
+        mad = np.median(np.abs(np.array(cosims) - median))
+        print(
+            tabulate(
+                [
+                    [f"{x:.4f}" for x in pdf] + [f"{median:.4f}"],
+                    [f"{x:.4f}" for x in cdf] + [f"{mad:.4f}"],
+                    ["<0.6", "<0.7", "<0.8", "<0.9", "<1.0", "med/mad"],
+                ],
+                style="grid",
+                nohead=True,
+            ),
+        )
