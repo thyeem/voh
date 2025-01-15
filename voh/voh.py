@@ -327,6 +327,7 @@ class voh(nn.Module):
                 self.train()
                 self.update_lr(sched=True)
                 self.validate(dl, sched=True)
+                self.dist(sched=True)
                 anchor, positive, negative = map(self, next(dl))
                 self.update_stat(anchor, positive, negative)
                 i, j = self.mine(anchor, positive, negative)
@@ -506,29 +507,48 @@ class voh(nn.Module):
         return self.it and self.it % val == 0
 
     @torch.no_grad()
-    def tasting(self):
-        self.eval()
-        cosims = []
-        for a, b in pairs:
-            cosim = self.cosim(a, b)
-            print(
-                f"{cosim:.4f} {speaker_id(a):>16} {speaker_id(b):>16}",
-                end="\r",
-                flush=True,
+    def dist(self, data=None, size=42, sched=False):
+
+        def t(pairs, mono=True):
+            cosims = []
+            for a, b in pairs:
+                cosim = self.cosim(a, b)
+                print(
+                    f"{cosim:.4f} {speaker_id(a):>16} {speaker_id(b):>16}",
+                    end="\r",
+                    flush=True,
+                )
+                cosims.append(cosim)
+            bins = [0.6, 0.7, 0.8, 0.9, 1.01]
+            hist = Counter(bisect(bins, cosim) for cosim in cosims)
+            pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
+            return dmap(
+                pdf=pdf,
+                cdf=(scanl1 if mono else scanr1)(op.add, pdf),
+                median=np.median(cosims),
+                mad=np.median(np.abs(np.array(cosims) - np.median(cosims))),
             )
-            cosims.append(cosim)
-        bins = [0.6, 0.7, 0.8, 0.9, 1.01]
-        hist = Counter(bisect(bins, cosim) for cosim in cosims)
-        pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
-        cdf = scanl1(op.add, pdf)
-        median = np.median(cosims)
-        mad = np.median(np.abs(np.array(cosims) - median))
+
+        if sched and not self.on_interval(self.conf.int_dist):
+            return
+        self.eval()
+        if data:
+            nfix, pfix = data
+        else:
+            if not hasattr(self, "nfix") and not hasattr(self, "pfix"):
+                db = read_json(self.conf.ds_val)
+                self.nfix = randpair(db, mono=False, size=size)
+                self.pfix = randpair(db, mono=True, size=size)
+            nfix, pfix = self.nfix, self.pfix
+        n, p = t(nfix, False), t(pfix, True)
         print(
             tabulate(
                 [
-                    [f"{x:.4f}" for x in pdf] + [f"{median:.4f}"],
-                    [f"{x:.4f}" for x in cdf] + [f"{mad:.4f}"],
+                    [f"{x:.4f}" for x in n.pdf] + [f"{n.median:.4f}"],
+                    [f"{x:.4f}" for x in n.cdf] + [f"{n.mad:.4f}"],
                     ["<0.6", "<0.7", "<0.8", "<0.9", "<1.0", "med/mad"],
+                    [f"{x:.4f}" for x in p.pdf] + [f"{p.median:.4f}"],
+                    [f"{x:.4f}" for x in p.cdf] + [f"{p.mad:.4f}"],
                 ],
                 style="grid",
                 nohead=True,
