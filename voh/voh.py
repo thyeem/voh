@@ -103,7 +103,10 @@ class voh(nn.Module):
                 t=dataq(self.conf.size_val * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
-            mine=dataq(self.conf.size_val * self.conf.size_batch**2),
+            mine=dmap(
+                size=dataq(self.conf.size_val),
+                diff=dataq(self.conf.size_val * self.conf.size_batch**2),
+            ),
         )
         self.ema = ema(alpha=self.stat.alpha)
         return self
@@ -327,10 +330,10 @@ class voh(nn.Module):
         g = self.conf.steps * self.conf.epochs  # global steps
         with dl:
             for _ in tracker(range(g), "training", start=self.it, total=g):
-                self.train()
-                self.update_lr(sched=True)
                 self.validate(dl, sched=True)
                 self.dist(sched=True)
+                self.update_lr(sched=True)
+                self.train()
                 anchor, positive, negative = map(self, next(dl))
                 self.update_stat(anchor, positive, negative)
                 i, j = self.mine(anchor, positive, negative)
@@ -382,16 +385,11 @@ class voh(nn.Module):
         hard_positives = torch.logical_and(
             ap < cutval(ap, self.conf.hard_ratio), D < self.conf.margin
         ).nonzero()
-        q = torch.tensor(
-            list(
-                set(map(tuple, hard_negatives.tolist())).intersection(
-                    set(map(tuple, hard_positives.tolist()))
-                )
-            )
-        )
+        q = torch.cat([hard_negatives, hard_positives])
         if not len(q):
             q = (D == torch.min(D)).nonzero()
-        self.dq.mine.update(D.tolist())
+        self.dq.mine.size.update(len(q))
+        self.dq.mine.diff.update(D.tolist())
         return q[:, 0], q[:, 1]
 
     @torch.no_grad()
@@ -458,15 +456,15 @@ class voh(nn.Module):
             [
                 f"{self.it:06d}",
                 f"{self._lr:.8f}",
-                f"{self.dq.mine.median:.4f}/{self.dq.mine.mad:.4f}",
+                f"{self.dq.mine.diff.median:.4f}/{self.dq.mine.diff.mad:.4f}",
                 f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
                 f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
                 f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
             ],
             [
                 "VAL",
-                "-",
-                f"{self.dq.mine.min:.4f}/{self.dq.mine.max:.4f}",
+                "/".join(f"{x:.1f}" for x in self.dq.mine.size.quartile),
+                f"{self.dq.mine.diff.min:.4f}/{self.dq.mine.diff.max:.4f}",
                 f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
                 f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
                 f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
@@ -538,7 +536,6 @@ class voh(nn.Module):
 
         if sched and not self.on_interval(self.conf.int_dist):
             return
-        self.eval()
         nfix, pfix = data if data else self.dist_pairs(size)
         n, p = t(nfix, "n-distrib", False), t(pfix, "p-distrib", True)
         print(

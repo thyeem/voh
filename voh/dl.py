@@ -102,10 +102,10 @@ class _dataloader:
     def worker(self):
         def worker_thread():
             trainset = iter(self.tset())
-            valset = iter(self.vset())
+            evalset = iter(self.vset())
             while not self.abort.is_set():
                 mode = self.mode.value
-                dataset = trainset if mode else valset
+                dataset = trainset if mode else evalset
                 queue = self.trainq if mode else self.evalq
                 for data in dataset:
                     if self.abort.is_set():

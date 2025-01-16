@@ -96,6 +96,12 @@ class dataq:
         return np.percentile(self.data, q)
 
     @property
+    def quartile(self):
+        if not self.data:
+            return []
+        return np.percentile(self.data, [25, 50, 75])
+
+    @property
     @if_empty
     def mean(self):
         return np.mean(self.data)
