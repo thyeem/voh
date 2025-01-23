@@ -50,6 +50,7 @@ class _dataset:
 
     def processor(self, triad):
         augmetor = perturb_tiny if self.augment else id
+        # augmetor = probify(p=0.2)(perturb(n=2)) if self.augment else id
         anchor, positive, negative = map(readwav, triad)
         return map(
             filterbank(  # log Mel-filterbank energies

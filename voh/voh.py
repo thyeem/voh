@@ -283,8 +283,11 @@ class voh(nn.Module):
         return cf_(self, (self.readf if file else self.read))(x)
 
     @torch.no_grad()
-    def cosim(self, x, y):
-        return F.cosine_similarity(self.embed(x), self.embed(y)).item()
+    def cosim(self, a, b):
+        return F.cosine_similarity(self.embed(a), self.embed(b)).item()
+
+    def verify(self, a, b, threshold=0.7):
+        return self.cosim(a, b) >= threshold
 
     # -----------
     # Training
@@ -340,7 +343,7 @@ class voh(nn.Module):
                 loss = self.get_loss(anchor[i], positive[i], negative[j])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=4.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
                 self.optim.step()
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)

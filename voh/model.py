@@ -20,6 +20,7 @@ class Encoder(nn.Module):
             conf.size_hidden_enc,
             conf.size_kernel_prolog,
             reduction=conf.ratio_reduction,
+            residual=False,
             end=True,
         )
         # num-of-blocks(B) = 1(prolog) + num-of-size_kernel_blocks + 1(epilog)
@@ -41,6 +42,7 @@ class Encoder(nn.Module):
             conf.size_out_enc,
             conf.size_kernel_epilog,
             reduction=conf.ratio_reduction,
+            residual=False,
             end=True,
         )
 
@@ -81,21 +83,19 @@ class Block(nn.Module):
             size_out,
             size_kernel,
             reduction=reduction,
+            residual=True,
             end=False,
         )
-        self.res = Residual(size_in, size_out)
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, mask, x):
-        out = cf_(
+        return cf_(
             self.dropout,
             self.relu,
-            _ + self.res(mask, x),  # residual connection
             f_(self.context, mask),  # SE-context
             cf__(*[f_(r, mask) for r in self.repeats]),  # Repeat Rx
         )(x)
-        return out
 
 
 class RepeatR(nn.Module):
@@ -111,12 +111,12 @@ class RepeatR(nn.Module):
         self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, mask, x):
-        out = cf_(
+        return cf_(
             self.dropout,
             self.relu,
+            _ + x,  # skip connection
             f_(self.tsc, mask),
         )(x)
-        return out
 
 
 class Context(nn.Module):
@@ -129,6 +129,7 @@ class Context(nn.Module):
         size_kernel,
         padding=None,
         reduction=8,
+        residual=False,
         end=False,
     ):
         super().__init__()
@@ -138,30 +139,15 @@ class Context(nn.Module):
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
         self.se = SqueezeExcite(size_out, reduction=reduction)
         self.relu = nn.ReLU(inplace=True) if end else None
+        self.res = residual
 
     def forward(self, mask, x):
-        out = cf_(
+        return cf_(
             self.relu if self.relu else id,
+            _ + x if self.res else id,  # skip connection
             self.se,
             f_(self.tsc, mask),
         )(x)
-        return out
-
-
-class Residual(nn.Module):
-    """Residual connection for Blocks in Encoder"""
-
-    def __init__(self, size_in, size_out):
-        super().__init__()
-        self.ln = LayerNorm(size_in)
-        self.conv = MaskedConv1d(size_in, size_out, 1, bias=False)
-
-    def forward(self, mask, x):
-        out = cf_(
-            f_(self.conv, mask),  # pointwise-conv
-            self.ln,
-        )(x)
-        return out
 
 
 class TimeSeparable(nn.Module):
@@ -195,13 +181,12 @@ class TimeSeparable(nn.Module):
         )
 
     def forward(self, mask, x):
-        out = cf_(
+        return cf_(
             # time-separable-conv :: 1d-depthwise-conv -> pointwise-conv
             f_(self.pointwise, mask),
             f_(self.depthwise, mask),
             self.ln,
         )(x)
-        return out
 
 
 class SqueezeExcite(nn.Module):
@@ -219,7 +204,7 @@ class SqueezeExcite(nn.Module):
         self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
 
     def forward(self, x):
-        out = cf_(
+        return cf_(
             _ * x,  # (B, C, C)
             torch.sigmoid,  # (B, C, 1)
             ob(_.transpose)(1, -1),  # (B, C, 1)
@@ -230,7 +215,6 @@ class SqueezeExcite(nn.Module):
             ob(_.mean)(dim=-1, keepdim=True),  # (B, C, 1)
             self.ln,
         )(x)
-        return out
 
 
 class MaskedConv1d(nn.Module):
@@ -277,7 +261,7 @@ class Decoder(nn.Module):
         super().__init__()
         self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
-        self.ln = LayerNorm(conf.size_out_dec)
+        self.ln = nn.LayerNorm(conf.size_out_dec)
 
     def forward(self, mask, x):
         return cf_(
@@ -359,9 +343,8 @@ class TDNN(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
-        out = cf_(
+        return cf_(
             self.relu,
             self.conv,
             self.ln,
         )(x)
-        return out

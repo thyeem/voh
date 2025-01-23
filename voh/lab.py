@@ -118,56 +118,21 @@ def safe_div(a, b):
 
 
 @fx
-def tt(x, model, threshold=0.7, expected=None, sound=False):
-    errlog = tmpfile(suffix=".err") if expected is not None else None
-    if errlog:
-        out = writer(errlog)
-        print(errlog)
+def tt(model, db, threshold=0.7, size=20, expected=False):
+    errlog = tmpfile(suffix=".err")
+    out = writer(errlog)
+    print(errlog)
     error = 0
-    for i, (a, b) in enumerate(to_pairs(x), start=1):
-        if not exists(a):
-            print(f"skip: {a}")
-            continue
-        if not exists(b):
-            print(f"skip: {b}")
-            continue
-        if sound:
-            (a, b) | mapl(play)
-        o = model.verify(a, b, threshold=threshold, v=True)
+    for a, b in randpair(db, mono=expected, size=size):
+        o = model.verify(a, b, threshold=threshold)
         if o != expected:
             error += 1
-            if out:
-                out.write(f"{model.cosim(a,b):.4f}  {archive(a)}  {archive(b)}\n")
-                out.flush()
-    if errlog:
-        print(errlog)
-    print(f"\nError Rate(%)={(error/i)*100:.2f}, total={i}")
-
-
-@fx
-def ttd(x, target, ref, threshold=0.7, expected=None, sound=False):
-    errlog = tmpfile(suffix=".err") if expected is not None else None
-    if errlog:
-        out = writer(errlog)
-        print(errlog)
-    for a, b in to_pairs(x):
-        if not exists(a):
-            print(f"skip: {a}")
-            continue
-        if not exists(b):
-            print(f"skip: {b}")
-            continue
-        if sound:
-            (a, b) | mapl(play)
-        r = ref.verify(a, b, threshold=threshold, v=True)
-        t = target.verify(a, b, threshold=threshold, v=True)
-        if errlog and (t != expected or r != expected):
-            out.write(f"{target.cosim(a,b):.4f}  {archive(a)}  {archive(b)}\n")
-            out.write(f"{ref.cosim(a,b):.4f}  {archive(a)}  {archive(b)}\n")
-            out.write("\n")
-            out.flush()
-    if errlog:
-        print(errlog)
+        log = f"{model.cosim(a,b):10.4f}  {speaker_id(a)}  {speaker_id(b)}"
+        print(log)
+        out.write(f"{log}\n")
+        out.flush()
+    print(errlog)
+    print(f"\nError Rate(%)={(error/size)*100:.2f}, total={size}")
 
 
 def plot_wav(f):
@@ -238,36 +203,21 @@ def plot_melspectrogram(f, n_mels=128):
     plt.show()
 
 
-def eval_error_rate(
-    model,
-    db,
-    mono=False,
-    sync=False,
-    threshold=0.7,
-    out=None,
-    p=None,
-    augmentor=None,
-):
+def eval_error_rate(model, db, sync=False, expected=False, threshold=0.7, out=None):
     """Evaluate model's Type I/II errors based on monte-carlo method.
-    mono == False -> test false-positive or FP (Type I error)
-    mono == True  -> test false-negative or FN (Type II error)
+    expected == False -> test false-positive or FP (Type I error)
+    expected == True  -> test false-negative or FN (Type II error)
     """
-
-    def loader():
-        while True:
-            yield randpair(db, mono=mono, sync=sync)
-
     if out:
-        out = writer(f"{out}.{'frr' if mono else 'far'}")
+        out = writer(f"{out}.{'frr' if expected else 'far'}")
     i, error = 1, 0
-    for a, b in loader():
-        cosim = model.cosim(a, b)
-        res = True if cosim > threshold else False
-        onError = res if not mono else not res
-        if onError:
+    while True:
+        a, b = randpair(db, mono=expected, sync=sync)
+        res = model.verify(a, b, threshold=threshold)
+        if res != expected:
             error += 1
             if out:
-                out.write(f"{archive(a)}  {archive(b)}\n")
+                out.write(f"{speaker_id(a)}  {speaker_id(b)}\n")
                 out.flush()
         if i % 10 == 0:
             print(f"Error Rate(%)={(error/i)*100:.2f}, total={i}")
@@ -347,7 +297,7 @@ def eval_bin_metrics(
     def fails(o, d, pairs, threshold):
         o.write(f"\nthreshold {threshold:.4f}:\n")
         for a, b in uniq(pairs):
-            o.write(f"{d.get((a,b)):.4f}  {archive(a)}  {archive(b)}\n")
+            o.write(f"{d.get((a,b)):.4f}  {speaker_id(a)}  {speaker_id(b)}\n")
 
     # TODO: consider augmentor
     mkdir(dirname(prefix))
@@ -387,12 +337,12 @@ def eval_bin_metrics(
             fails(frr, d, fn, threshold)
 
 
-def pairs_pos(size, db, sync=False, key=None, augmentor=None, p=None):
+def pairs_pos(size, db, sync=False, key=None):
     # TODO: consider augmentor
     return [randpair(db, mono=1, sync=sync, key=key) for _ in range(size)]
 
 
-def pairs_neg(size, db, key=None, augmentor=None, p=None):
+def pairs_neg(size, db, key=None):
     # TODO: consider augmentor
     return [randpair(db, mono=0, key=key) for _ in range(size)]
 

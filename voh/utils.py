@@ -433,18 +433,6 @@ def speaker_id(f, maxlen=24):
         return capture(r"^[^_]+_[^_]+", d) or d
 
 
-def archive(f, d="arch/"):
-    paths = f.split("/")
-    if len(paths) < 2 or paths[1] != "tmp":  # archive tmpfile only
-        return f
-    d = f"{normpath(d, abs=True)}/{speaker_id(f)}"
-    mkdir(d)
-    t = f"{d}/{basename(f)}"
-    if not exists(t):
-        shell(f"cp -f {f} {t}")
-    return t
-
-
 def play(x, rev=False):
     y, sr = x if isinstance(x, tuple) else readwav(x)
     y = y[::-1] if rev else y
@@ -569,16 +557,6 @@ def triplet(db, size=1):
     anchor, negative = r[:size], r[size:]
     positive = [nodup(db, a) for a in anchor]
     return anchor, positive, negative
-
-
-def get_pre_trained():
-    import nemo.collections.asr as nemo_asr
-    from nemo.utils import logging
-
-    logging.setLevel(logging.ERROR)
-    return nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
-        "nvidia/speakerverification_en_titanet_large"
-    )
 
 
 # ----------------------
@@ -868,6 +846,41 @@ def add_to_sfx(src, out="sfx", ss=None, to=None):
     return out
 
 
+def read_nemo(f=None):
+    import nemo.collections.asr as nemo_asr
+    from nemo.utils import logging
+
+    logging.setLevel(logging.ERROR)
+    return (
+        nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
+            "nvidia/speakerverification_en_titanet_large"
+        )
+        if f is None
+        else nemo_asr.models.EncDecSpeakerLabelModel.restore_from(f)
+    )
+
+
+class TT:
+    def __init__(self, model):
+        from nemo.collections.asr.models import EncDecSpeakerLabelModel
+
+        if isinstance(model, EncDecSpeakerLabelModel):
+            self.from_nemo = True
+        else:
+            self.from_nemo = False
+        model.eval()
+        self.md = model
+
+    def embed(self, f):
+        return (self.md.get_embedding if self.from_nemo else self.md.embed)(f)
+
+    def cosim(self, a, b):
+        return F.cosine_similarity(self.embed(a), self.embed(b)).item()
+
+    def verify(self, a, b, threshold=0.7):
+        return self.cosim(a, b) >= threshold
+
+
 # ----------------------
 # Youtube pipeline
 # ----------------------
@@ -1029,22 +1042,13 @@ def _toptier(d, tier):
     return mapl(fst, sort(d.items(), key=lambda x: x[1], reverse=True)[:tier])
 
 
-@torch.no_grad()
-def nemo_cosim(model, x, y):
-    model.eval()
-    return F.cosine_similarity(
-        model.get_embedding(x),
-        model.get_embedding(y),
-    ).item()
-
-
 def mcmc_sample(model, jar, limit, size):
     cache = {}
     counts = {k: 0 for k in jar}
     cosims = {k: [0] for k in jar}
     warmup = int(size * BURN_IN)
     a, b = choice(jar, size=2)
-    corr = nemo_cosim(model, a, b)
+    corr = model.cosim(a, b)
     cache[_pair_id(a, b)] = corr
     for i in tracker(range(size + warmup), "MCMC sampling".rjust(COL)):
         new_a, new_b = choice(jar, size=2)
@@ -1052,7 +1056,7 @@ def mcmc_sample(model, jar, limit, size):
         if k in cache:
             new_corr = cache[k]
         else:
-            new_corr = nemo_cosim(model, new_a, new_b)
+            new_corr = model.cosim(new_a, new_b)
             cache[k] = new_corr
         if new_corr > limit or rand(0, 1) < np.exp(
             (new_corr - corr) / (1 - corr),
@@ -1073,7 +1077,7 @@ def challenge(model, refs, targets, tol, cache):
         corrs = []
         for r in refs:
             k = _pair_id(r, t)
-            corrs.append(cache[k] if k in cache else nemo_cosim(model, r, t))
+            corrs.append(cache[k] if k in cache else model.cosim(r, t))
             score = hmean(corrs)
         if score < tol:
             doom.append(t)
