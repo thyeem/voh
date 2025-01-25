@@ -810,10 +810,11 @@ def perturb(ysr, n=None, v=False):
 
 @fx
 def perturb_tiny(ysr, v=False):
+    """Augmentor the same as TitaNet-L's augmentor"""
     return cf_(
         *shuffle(
-            [  # The same as TitaNet-L's augmentor
-                probify(p=0.2)(gaussian_noise(snr=(0, 15), v=v)),
+            [
+                probify(p=0.5)(gaussian_noise(snr=(0, 15), v=v)),
                 probify(p=0.2)(time_stretch(rate=(0.95, 1.05), v=v)),
             ]
         )

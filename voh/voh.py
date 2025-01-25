@@ -354,13 +354,10 @@ class voh(nn.Module):
                 self.it += 1
 
     def get_loss(self, anchor, positive, negative):
-        def margin(an, ap, factor=0.5):
-            return self.conf.margin + factor * (an - ap)
-
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
         L2 = anchor.norm() + positive.norm() + negative.norm()
-        loss = torch.clamp(an - ap + margin(an, ap), min=0)
+        loss = torch.clamp(an - ap + self.conf.margin, min=0)
         return self.conf.scale * loss.mean() + self.conf.lam * L2
 
     def mine(self, anchor, positive, negative):
@@ -368,9 +365,9 @@ class voh(nn.Module):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
         D = ap - an
-        hardcut = 100 * (1 - self.conf.hard_ratio)
+        cutoff = 100 * (1 - self.conf.hard_ratio)
         i, j = torch.logical_and(
-            an > dataq(an.numel(), an.tolist()).percentile(hardcut),
+            an > dataq(an.numel(), an.tolist()).percentile(cutoff),
             D < self.conf.margin,
         ).nonzero(as_tuple=True)
         if not len(i):
