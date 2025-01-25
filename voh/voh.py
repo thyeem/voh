@@ -335,11 +335,15 @@ class voh(nn.Module):
             for _ in tracker(range(g), "training", start=self.it, total=g):
                 self.validate(dl, sched=True)
                 self.dist(sched=True)
+                triplet = next(dl)
+                self.eval()
+                with torch.no_grad():
+                    anchor, positive, negative = map(self, triplet)
+                    i, j = self.mine(anchor, positive, negative)
+
                 self.update_lr(sched=True)
                 self.train()
-                anchor, positive, negative = map(self, next(dl))
-                self.update_stat(anchor, positive, negative)
-                i, j = self.mine(anchor, positive, negative)
+                anchor, positive, negative = map(self, triplet)
                 loss = self.get_loss(anchor[i], positive[i], negative[j])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
@@ -350,61 +354,32 @@ class voh(nn.Module):
                 self.it += 1
 
     def get_loss(self, anchor, positive, negative):
+        def margin(an, ap, factor=0.5):
+            return self.conf.margin + factor * (an - ap)
+
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
         L2 = anchor.norm() + positive.norm() + negative.norm()
-        loss = torch.clamp(an - ap + self.conf.margin, min=0)
-        return (
-            self.conf.scale * loss.mean()  # triplet loss
-            + self.conf.lam * L2  # L2 regularization
-        )
+        loss = torch.clamp(an - ap + margin(an, ap), min=0)
+        return self.conf.scale * loss.mean() + self.conf.lam * L2
 
-    @torch.no_grad()
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
-
-        def cutval(T, ratio):
-            return dataq(T.numel(), T.tolist()).percentile(100 * ratio)
-
-        self.train()
-        ap = (
-            F.cosine_similarity(
-                anchor,
-                positive,
-                dim=-1,
-            )
-            .unsqueeze(1)
-            .expand(-1, len(positive))
-        )
-        an = F.cosine_similarity(
-            anchor.unsqueeze(1),
-            negative.unsqueeze(0),
-            dim=-1,
-        )
+        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
         D = ap - an
-        hard_negatives = torch.logical_and(
-            an > cutval(an, 1 - self.conf.hard_ratio), D < self.conf.margin
-        ).nonzero()
-        hard_positives = torch.logical_and(
-            ap < cutval(ap, self.conf.hard_ratio), D < self.conf.margin
-        ).nonzero()
-        q = torch.cat([hard_negatives, hard_positives])
-        if not len(q):
-            q = (D == torch.min(D)).nonzero()
-        self.dq.mine.size.update(len(q))
+        hardcut = 100 * (1 - self.conf.hard_ratio)
+        i, j = torch.logical_and(
+            an > dataq(an.numel(), an.tolist()).percentile(hardcut),
+            D < self.conf.margin,
+        ).nonzero(as_tuple=True)
+        if not len(i):
+            i, j = (D == torch.min(D)).nonzero(as_tuple=True)
+        self.dq.mine.size.update(len(i))
         self.dq.mine.diff.update(D.tolist())
-        return q[:, 0], q[:, 1]
-
-    @torch.no_grad()
-    def update_stat(self, anchor, positive, negative):
-        ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
-        an = F.cosine_similarity(anchor, negative, dim=-1).tolist()
-        if self.training:
-            self.dq.pos.t.update(ap)
-            self.dq.neg.t.update(an)
-        else:
-            self.dq.pos.v.update(ap)
-            self.dq.neg.v.update(an)
+        self.dq.pos.t.update(ap[i].tolist())
+        self.dq.neg.t.update(an[(i, j)].tolist())
+        return i, j
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
@@ -414,8 +389,12 @@ class voh(nn.Module):
         dl.eval()
         for _ in tracker(range(self.conf.size_val), "validation"):
             anchor, positive, negative = map(self, next(dl))
-            self.update_stat(anchor, positive, negative)
-            self.dq.loss.v.update(self.get_loss(anchor, positive, negative).item())
+            loss = self.get_loss(anchor, positive, negative).item()
+            ap = F.cosine_similarity(anchor, positive, dim=-1).tolist()
+            an = F.cosine_similarity(anchor, negative, dim=-1).tolist()
+            self.dq.loss.v.update(loss)
+            self.dq.pos.v.update(ap)
+            self.dq.neg.v.update(an)
         self.stat.loss.v = self.ema(self.stat.loss.v, self.dq.loss.v.median)
         if self.stat.loss.v < self.stat.minloss:
             self.stat.minloss = self.stat.loss.v
@@ -459,15 +438,15 @@ class voh(nn.Module):
             [
                 f"{self.it:06d}",
                 f"{self._lr:.8f}",
-                f"{self.dq.mine.diff.median:.4f}/{self.dq.mine.diff.mad:.4f}",
+                f"{self.dq.mine.diff.median:7.4f}/{self.dq.mine.diff.mad:.4f}",
                 f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
                 f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
                 f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
             ],
             [
-                "VAL",
+                "",
                 "/".join(f"{x:.1f}" for x in self.dq.mine.size.quartile),
-                f"{self.dq.mine.diff.min:.4f}/{self.dq.mine.diff.max:.4f}",
+                f"{self.dq.mine.diff.min:7.4f}/{self.dq.mine.diff.max:.4f}",
                 f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
                 f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
                 f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
