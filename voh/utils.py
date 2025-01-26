@@ -381,7 +381,9 @@ def reduce_data(path, cutoff=300, workers=None, sr=None):
         if sr:
             wavs = ls(speaker, grep=r".wav$")
             for wav in tracker(wavs, "resample"):
-                savewav(wav, resample(readwav(wav), sr=sr))
+                ysr = readwav(wav)
+                if sr != snd(ysr):
+                    savewav(wav, resample(ysr, sr=sr))
 
 
 def create_mmap(f="data.db", out="mmap", sr=16000):
