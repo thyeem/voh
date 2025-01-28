@@ -34,7 +34,6 @@ conf = dmap(
     lam=(META, 0.2),  # L2 regularization lambda coefficient
     delta=(META, 1.0),  # dispersion penalty coefficient
     hard_ratio=(META, 0.1),  # ratio of hard samples
-    diff_gap=(META, 0.15),  # diff margin when hard sampling
     weight_decay=(META, 1e-4),  # optimizer's weight decay
     momentum=(META, 0.9),  # optimizer's momentum
     betas=(META, (0.9, 0.999)),  # optimizer's betas

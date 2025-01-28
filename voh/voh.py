@@ -96,16 +96,16 @@ class voh(nn.Module):
                 v=dataq(self.conf.size_val),
             ),
             pos=dmap(
-                t=dataq(self.conf.size_val * self.conf.size_batch),
+                t=dataq(100 * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(self.conf.size_val * self.conf.size_batch),
+                t=dataq(100 * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             mine=dmap(
-                size=dataq(self.conf.size_val),
-                diff=dataq(self.conf.size_val * self.conf.size_batch**2),
+                size=dataq(100),
+                diff=dataq(100 * self.conf.size_batch**2),
             ),
         )
         self.ema = ema(alpha=self.stat.alpha)
@@ -369,9 +369,10 @@ class voh(nn.Module):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
         D = ap - an
+        D = D[~D.isnan()]
         cutoff = 100 * (1 - self.conf.hard_ratio)
         self.dq.mine.diff.update(D.tolist())
-        margin = self.dq.mine.diff.median + self.conf.diff_gap
+        margin = self.dq.mine.diff.median
         i, j = torch.logical_and(
             an > dataq(an.numel(), an.tolist()).percentile(cutoff),
             D < margin,
