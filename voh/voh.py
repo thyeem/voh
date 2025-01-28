@@ -96,16 +96,16 @@ class voh(nn.Module):
                 v=dataq(self.conf.size_val),
             ),
             pos=dmap(
-                t=dataq(100 * self.conf.size_batch),
+                t=dataq(1000 * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(100 * self.conf.size_batch),
+                t=dataq(1000 * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             mine=dmap(
-                size=dataq(100),
-                diff=dataq(100 * self.conf.size_batch**2),
+                size=dataq(1000),
+                diff=dataq(1000 * self.conf.size_batch**2, 0.1),
             ),
         )
         self.ema = ema(alpha=self.stat.alpha)
@@ -366,12 +366,11 @@ class voh(nn.Module):
 
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
-        ap = F.cosine_similarity(anchor, positive, dim=-1)
+        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
         an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
         D = ap - an
-        D = D[~D.isnan()]
+        D = torch.where(D.isnan(), float("inf"), D)
         cutoff = 100 * (1 - self.conf.hard_ratio)
-        self.dq.mine.diff.update(D.tolist())
         margin = self.dq.mine.diff.median
         i, j = torch.logical_and(
             an > dataq(an.numel(), an.tolist()).percentile(cutoff),
@@ -379,6 +378,7 @@ class voh(nn.Module):
         ).nonzero(as_tuple=True)
         if not len(i):
             i, j = (D == torch.min(D)).nonzero(as_tuple=True)
+        self.dq.mine.diff.update(D.view(-1).tolist())
         self.dq.mine.size.update(len(i))
         self.dq.pos.t.update(ap[i].tolist())
         self.dq.neg.t.update(an[(i, j)].tolist())
