@@ -198,7 +198,6 @@ class SqueezeExcite(nn.Module):
             channels % reduction == 0,
             f"Error, SE({channels}) must be divisible by {reduction}",
         )
-        self.ln = LayerNorm(channels)
         self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
         self.relu = nn.ReLU(inplace=True)
         self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
@@ -213,7 +212,6 @@ class SqueezeExcite(nn.Module):
             self.fc1,  # (B, 1, C // reduction)
             ob(_.transpose)(1, -1),  # (B, 1, C)
             ob(_.mean)(dim=-1, keepdim=True),  # (B, C, 1)
-            self.ln,
         )(x)
 
 
@@ -244,8 +242,11 @@ class MaskedConv1d(nn.Module):
 
 
 class LayerNorm(nn.LayerNorm):
-    def __init__(self, channels):
-        super().__init__(normalized_shape=channels)
+    def __init__(self, channels, elementwise_affine=False):
+        super().__init__(
+            normalized_shape=channels,
+            elementwise_affine=elementwise_affine,
+        )
 
     def forward(self, x):
         return cf_(
@@ -261,7 +262,7 @@ class Decoder(nn.Module):
         super().__init__()
         self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
-        self.ln = nn.LayerNorm(conf.size_out_dec)
+        self.ln = nn.LayerNorm(conf.size_out_dec, elementwise_affine=False)
 
     def forward(self, mask, x):
         return cf_(
