@@ -361,28 +361,40 @@ class voh(nn.Module):
         return (
             self.conf.scale * loss.mean()  # triplet loss
             + self.conf.lam * L2  # L2 regularization
-            + self.conf.delta * torch.exp(an.var())  # dispersion penalty
         )
 
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
-        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
-        an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
+
+        def cutval(T, ratio):
+            return dataq(T.numel(), T.tolist()).percentile(100 * ratio)
+
+        ap = (
+            F.cosine_similarity(anchor, positive, dim=-1)
+            .unsqueeze(1)
+            .expand(-1, len(positive))
+        )
+        an = F.cosine_similarity(
+            anchor.unsqueeze(1),
+            negative.unsqueeze(0),
+            dim=-1,
+        )
         D = ap - an
-        D = torch.where(D.isnan(), float("inf"), D)
-        cutoff = 100 * (1 - self.conf.hard_ratio)
         margin = self.dq.mine.diff.median
-        i, j = torch.logical_and(
-            an > dataq(an.numel(), an.tolist()).percentile(cutoff),
-            D < margin,
-        ).nonzero(as_tuple=True)
-        if not len(i):
-            i, j = (D == torch.min(D)).nonzero(as_tuple=True)
+        hard_negatives = torch.logical_and(
+            an > cutval(an, 1 - self.conf.hard_ratio), D < margin
+        ).nonzero()
+        hard_positives = torch.logical_and(
+            ap < cutval(ap, self.conf.hard_ratio), D < margin
+        ).nonzero()
+        q = torch.cat([hard_negatives, hard_positives], dim=0)
+        if not len(q):
+            q = (D == torch.min(D)).nonzero()
         self.dq.mine.diff.update(D.view(-1).tolist())
-        self.dq.mine.size.update(len(i))
-        self.dq.pos.t.update(ap[i].tolist())
-        self.dq.neg.t.update(an[(i, j)].tolist())
-        return i, j
+        self.dq.mine.size.update(len(q))
+        self.dq.pos.t.update(ap[hard_positives].tolist())
+        self.dq.neg.t.update(an[hard_negatives].tolist())
+        return q[:, 0], q[:, 1]
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
