@@ -100,12 +100,12 @@ class voh(nn.Module):
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(1000 * self.conf.size_batch),
+                t=dataq(1000 * self.conf.size_batch, 0.5),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             mine=dmap(
                 size=dataq(1000),
-                diff=dataq(1000 * self.conf.size_batch**2, 0.1),
+                diff=dataq(1000 * self.conf.size_batch**2),
             ),
         )
         self.ema = ema(alpha=self.stat.alpha)
@@ -356,45 +356,31 @@ class voh(nn.Module):
     def get_loss(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
-        L2 = anchor.norm() + positive.norm() + negative.norm()
-        loss = torch.clamp(an - ap + self.conf.margin, min=0)
+        loss = F.relu(an - ap + self.conf.margin)
         return (
             self.conf.scale * loss.mean()  # triplet loss
-            + self.conf.lam * L2  # L2 regularization
+            + torch.exp(an).mean()  # penalize negatives
+            + torch.exp(-ap).mean()  # penalize positives
         )
 
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
-
-        def cutval(T, ratio):
-            return dataq(T.numel(), T.tolist()).percentile(100 * ratio)
-
-        ap = (
-            F.cosine_similarity(anchor, positive, dim=-1)
-            .unsqueeze(1)
-            .expand(-1, len(positive))
-        )
+        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
         an = F.cosine_similarity(
             anchor.unsqueeze(1),
             negative.unsqueeze(0),
             dim=-1,
         )
-        D = ap - an
-        margin = self.dq.mine.diff.median
-        hard_negatives = torch.logical_and(
-            an > cutval(an, 1 - self.conf.hard_ratio), D < margin
-        ).nonzero()
-        hard_positives = torch.logical_and(
-            ap < cutval(ap, self.conf.hard_ratio), D < margin
-        ).nonzero()
-        q = torch.cat([hard_negatives, hard_positives], dim=0)
-        if not len(q):
-            q = (D == torch.min(D)).nonzero()
-        self.dq.mine.diff.update(D.view(-1).tolist())
-        self.dq.mine.size.update(len(q))
-        self.dq.pos.t.update(ap[hard_positives].tolist())
-        self.dq.neg.t.update(an[hard_negatives].tolist())
-        return q[:, 0], q[:, 1]
+        i, j = (
+            an > self.dq.neg.t.percentile(100 * (1 - self.conf.hard_ratio))
+        ).nonzero(as_tuple=True)
+        if not len(i):
+            i, j = (an == torch.max(an)).nonzero(as_tuple=True)
+        self.dq.mine.diff.update((ap - an).view(-1).tolist())
+        self.dq.mine.size.update(len(i))
+        self.dq.pos.t.update(ap.view(-1).tolist())
+        self.dq.neg.t.update(an.view(-1).tolist())
+        return i, j
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
