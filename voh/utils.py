@@ -65,12 +65,7 @@ class dataq:
             self.update(data)
 
     def update(self, v):
-        if _ns_iterp(v):
-            self.data.extend(v)
-        else:
-            if np.isnan(v):
-                return
-            self.data.append(v)
+        self.data.extend(flat(v))
 
     def if_empty(f):
         def wrapper(self, *args, **kwargs):

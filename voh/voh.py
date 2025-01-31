@@ -100,7 +100,7 @@ class voh(nn.Module):
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(1000 * self.conf.size_batch, 0.5),
+                t=dataq(1000 * self.conf.size_batch, 1.0),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             mine=dmap(
@@ -347,7 +347,7 @@ class voh(nn.Module):
                 loss = self.get_loss(anchor[i], positive[i], negative[j])
                 self.optim.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
                 self.optim.step()
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
@@ -365,22 +365,30 @@ class voh(nn.Module):
 
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
-        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
+        ap = (
+            F.cosine_similarity(anchor, positive, dim=-1)
+            .unsqueeze(1)
+            .expand(-1, len(positive))
+        )
         an = F.cosine_similarity(
             anchor.unsqueeze(1),
             negative.unsqueeze(0),
             dim=-1,
         )
-        i, j = (
+        hard = (
             an > self.dq.neg.t.percentile(100 * (1 - self.conf.hard_ratio))
-        ).nonzero(as_tuple=True)
-        if not len(i):
-            i, j = (an == torch.max(an)).nonzero(as_tuple=True)
-        self.dq.mine.diff.update((ap - an).view(-1).tolist())
-        self.dq.mine.size.update(len(i))
-        self.dq.pos.t.update(ap.view(-1).tolist())
-        self.dq.neg.t.update(an.view(-1).tolist())
-        return i, j
+        ).nonzero()
+        semi = ((an > ap) & (an < ap + self.conf.margin)).nonzero()
+        q = (
+            (an == torch.max(an)).nonzero()
+            if not len(hard) and not len(semi)
+            else torch.cat([hard, semi], dim=0)
+        )
+        self.dq.mine.diff.update((ap - an).tolist())
+        self.dq.mine.size.update(len(q))
+        self.dq.pos.t.update(ap.tolist())
+        self.dq.neg.t.update(an.tolist())
+        return q[:, 0], q[:, 1]
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
