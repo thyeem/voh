@@ -107,6 +107,7 @@ class RepeatR(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
+        self.res = Residual(size_in, size_out)
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -114,7 +115,7 @@ class RepeatR(nn.Module):
         return cf_(
             self.dropout,
             self.relu,
-            _ + x,  # skip connection
+            f_(self.res, x, mask),  # skip connection
             f_(self.tsc, mask),
         )(x)
 
@@ -139,15 +140,31 @@ class Context(nn.Module):
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
         self.se = SqueezeExcite(size_out, reduction=reduction)
         self.relu = nn.ReLU(inplace=True) if end else None
-        self.res = residual
+        self.res = Residual(size_in, size_out) if residual else None
 
     def forward(self, mask, x):
         return cf_(
             self.relu if self.relu else id,
-            _ + x if self.res else id,  # skip connection
+            f_(self.res, x, mask) if self.res is not None else id,
             self.se,
             f_(self.tsc, mask),
         )(x)
+
+
+class Residual(nn.Module):
+    """Add transformed input while preserving identity features"""
+
+    def __init__(self, size_in, size_out, size_kernel=1):
+        super().__init__()
+        self.ln = LayerNorm(size_in)
+        self.conv = MaskedConv1d(size_in, size_out, size_kernel, bias=False)
+
+    def forward(self, residual, mask, x):
+        return cf_(
+            _ + x,
+            f_(self.conv, mask),
+            self.ln,
+        )(residual)
 
 
 class TimeSeparable(nn.Module):
@@ -242,11 +259,8 @@ class MaskedConv1d(nn.Module):
 
 
 class LayerNorm(nn.LayerNorm):
-    def __init__(self, channels, elementwise_affine=False):
-        super().__init__(
-            normalized_shape=channels,
-            elementwise_affine=elementwise_affine,
-        )
+    def __init__(self, channels):
+        super().__init__(normalized_shape=channels)
 
     def forward(self, x):
         return cf_(
@@ -262,7 +276,7 @@ class Decoder(nn.Module):
         super().__init__()
         self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
-        self.ln = nn.LayerNorm(conf.size_out_dec, elementwise_affine=False)
+        self.ln = nn.LayerNorm(conf.size_out_dec)
 
     def forward(self, mask, x):
         return cf_(
