@@ -77,8 +77,8 @@ class voh(nn.Module):
             self.load_state_dict(model, strict=strict)
         return self
 
-    def set_iter(self, it=None):
-        self.it = 0 if self.conf.reset else (it or 0)
+    def set_iter(self, it=0):
+        self.it = 0 if self.conf.reset else it
         return self
 
     def set_stat(self, stat=None):
@@ -256,7 +256,7 @@ class voh(nn.Module):
         x = x.to(device=self.device)
         mask = create_mask(x, ipad=self.ipad)
         return cf_(
-            f_(self.decoder, mask),
+            f_(self.decoder, mask, ipad=self.ipad),
             f_(self.encoder, mask),
         )(x)
 
@@ -332,7 +332,7 @@ class voh(nn.Module):
         dl.train()
         g = self.conf.steps * self.conf.epochs  # global steps
         with dl:
-            for _ in tracker(range(g), "training", start=self.it, total=g):
+            for _ in tracker(range(g), "training", start=self.it):
                 self.validate(dl, sched=True)
                 self.dist(sched=True)
                 triplet = next(dl)
@@ -340,7 +340,6 @@ class voh(nn.Module):
                 with torch.no_grad():
                     anchor, positive, negative = map(self, triplet)
                     i, j = self.mine(anchor, positive, negative)
-
                 self.update_lr(sched=True)
                 self.train()
                 anchor, positive, negative = map(self, triplet)
@@ -378,7 +377,9 @@ class voh(nn.Module):
         hard = (
             an > self.dq.neg.t.percentile(100 * (1 - self.conf.hard_ratio))
         ).nonzero()
-        semi = ((an > ap) & (an < ap + self.conf.margin)).nonzero()
+        semi = (
+            (an > ap) & (an < ap + self.conf.semi_ratio * self.conf.margin)
+        ).nonzero()
         q = (
             (an == torch.max(an)).nonzero()
             if not len(hard) and not len(semi)

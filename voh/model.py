@@ -135,19 +135,17 @@ class Context(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
-        self.ln_1 = LayerNorm(size_out)
         self.se = SqueezeExcite(size_out, reduction=reduction)
-        self.ln_2 = LayerNorm(size_out)
+        self.ln = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True) if end else None
         self.end = end  # flag for [pro|epil]log block
 
     def forward(self, mask, x):
         return cf_(
             self.relu if self.end else id,
-            self.ln_2,
+            self.ln,
             id if self.end else _ + x,  # skip connection when not in end block
             self.se,
-            self.ln_1,
             f_(self.tsc, mask),
         )(x)
 
@@ -260,11 +258,11 @@ class Decoder(nn.Module):
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
         self.ln = nn.LayerNorm(conf.size_out_dec)
 
-    def forward(self, mask, x):
+    def forward(self, mask, x, ipad=0):
         return cf_(
             self.ln,
             self.emb,  # (B, E)
-            f_(self.pool, mask),  # (B, 2C, 1)
+            f_(self.pool, mask, ipad=ipad),  # (B, 2C, 1)
         )(x)
 
 
@@ -274,10 +272,9 @@ class AttentivePool(nn.Module):
     def __init__(self, size_in, size_attn_pool):
         super().__init__()
         self.tdnn = TDNN(size_in * 3, size_attn_pool, 1)
-        self.tanh = nn.Tanh()
         self.conv = nn.Conv1d(size_attn_pool, size_in, 1)
 
-    def forward(self, mask, x):
+    def forward(self, mask, x, ipad=0):
         B, C, T = x.size()  # dim(x) = (B, C, T)
         norm_mask = mask / torch.sum(mask, dim=2, keepdim=True)  # (B, 1, T)
 
@@ -289,9 +286,8 @@ class AttentivePool(nn.Module):
         # attention value
         alpha = cf_(
             F.softmax,
-            ob(_.masked_fill)(mask == 0, float("-inf")),
+            ob(_.masked_fill)(mask == ipad, float("-inf")),
             self.conv,
-            self.tanh,
             self.tdnn,
         )(y)
         # stats from attention
@@ -321,13 +317,14 @@ class TDNN(nn.Module):
         size_in,
         size_out,
         size_kernel=1,
-        dilation=1,
+        dilation=2,
         stride=1,
         padding=None,
     ):
         super().__init__()
         if padding is None:
             padding = pad_conv(size_kernel, dilation)
+        self.ln = LayerNorm(size_in)
         self.conv = nn.Conv1d(
             size_in,
             size_out,
@@ -336,12 +333,11 @@ class TDNN(nn.Module):
             stride=stride,
             padding=padding,
         )
-        self.relu = nn.ReLU(inplace=True)
-        self.ln = LayerNorm(size_out)
+        self.tanh = nn.Tanh()
 
     def forward(self, x):
         return cf_(
-            self.ln,
-            self.relu,
+            self.tanh,
             self.conv,
+            self.ln,
         )(x)
