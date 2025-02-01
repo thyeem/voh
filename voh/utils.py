@@ -13,7 +13,6 @@ import soundfile as sf
 import torch
 from foc import *
 from ouch import *
-from ouch import _ns_iterp
 from pytubefix import YouTube
 from scipy.signal import butter, fftconvolve, sosfilt
 from torch.nn import functional as F
@@ -811,7 +810,7 @@ def perturb_tiny(ysr, v=False):
     return cf_(
         *shuffle(
             [
-                probify(p=0.2)(gaussian_noise(snr=(0, 15), v=v)),
+                probify(p=0.5)(gaussian_noise(snr=(0, 15), v=v)),
                 probify(p=0.2)(time_stretch(rate=(0.95, 1.05), v=v)),
             ]
         )

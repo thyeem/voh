@@ -20,7 +20,6 @@ class Encoder(nn.Module):
             conf.size_hidden_enc,
             conf.size_kernel_prolog,
             reduction=conf.ratio_reduction,
-            residual=False,
             end=True,
         )
         # num-of-blocks(B) = 1(prolog) + num-of-size_kernel_blocks + 1(epilog)
@@ -42,7 +41,6 @@ class Encoder(nn.Module):
             conf.size_out_enc,
             conf.size_kernel_epilog,
             reduction=conf.ratio_reduction,
-            residual=False,
             end=True,
         )
 
@@ -83,7 +81,6 @@ class Block(nn.Module):
             size_out,
             size_kernel,
             reduction=reduction,
-            residual=True,
             end=False,
         )
         self.relu = nn.ReLU(inplace=True)
@@ -107,7 +104,7 @@ class RepeatR(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
-        self.res = Residual(size_in, size_out)
+        self.ln = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -115,7 +112,8 @@ class RepeatR(nn.Module):
         return cf_(
             self.dropout,
             self.relu,
-            f_(self.res, mask, x),  # skip connection
+            self.ln,
+            _ + x,  # skip connection
             f_(self.tsc, mask),
         )(x)
 
@@ -130,7 +128,6 @@ class Context(nn.Module):
         size_kernel,
         padding=None,
         reduction=8,
-        residual=False,
         end=False,
     ):
         super().__init__()
@@ -138,35 +135,21 @@ class Context(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
-        self.ln = LayerNorm(size_out)
+        self.ln_1 = LayerNorm(size_out)
         self.se = SqueezeExcite(size_out, reduction=reduction)
-        self.res = Residual(size_in, size_out) if residual else None
+        self.ln_2 = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True) if end else None
+        self.end = end  # flag for [pro|epil]log block
 
     def forward(self, mask, x):
         return cf_(
-            self.relu if self.relu is not None else id,
-            f_(self.res, mask, x) if self.res is not None else id,
+            self.relu if self.end else id,
+            self.ln_2,
+            id if self.end else _ + x,  # skip connection when not in end block
             self.se,
-            self.ln,
+            self.ln_1,
             f_(self.tsc, mask),
         )(x)
-
-
-class Residual(nn.Module):
-    """Add transformed input while preserving identity features"""
-
-    def __init__(self, size_in, size_out, size_kernel=1):
-        super().__init__()
-        self.conv = MaskedConv1d(size_in, size_out, size_kernel, bias=False)
-        self.ln = LayerNorm(size_out)
-
-    def forward(self, mask, residual, x):
-        return cf_(
-            self.ln,
-            _ + x,
-            f_(self.conv, mask),
-        )(residual)
 
 
 class TimeSeparable(nn.Module):
