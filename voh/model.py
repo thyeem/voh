@@ -115,7 +115,7 @@ class RepeatR(nn.Module):
         return cf_(
             self.dropout,
             self.relu,
-            f_(self.res, x, mask),  # skip connection
+            f_(self.res, mask, x),  # skip connection
             f_(self.tsc, mask),
         )(x)
 
@@ -138,15 +138,17 @@ class Context(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
+        self.ln = LayerNorm(size_out)
         self.se = SqueezeExcite(size_out, reduction=reduction)
-        self.relu = nn.ReLU(inplace=True) if end else None
         self.res = Residual(size_in, size_out) if residual else None
+        self.relu = nn.ReLU(inplace=True) if end else None
 
     def forward(self, mask, x):
         return cf_(
-            self.relu if self.relu else id,
-            f_(self.res, x, mask) if self.res is not None else id,
+            self.relu if self.relu is not None else id,
+            f_(self.res, mask, x) if self.res is not None else id,
             self.se,
+            self.ln,
             f_(self.tsc, mask),
         )(x)
 
@@ -156,14 +158,14 @@ class Residual(nn.Module):
 
     def __init__(self, size_in, size_out, size_kernel=1):
         super().__init__()
-        self.ln = LayerNorm(size_in)
         self.conv = MaskedConv1d(size_in, size_out, size_kernel, bias=False)
+        self.ln = LayerNorm(size_out)
 
-    def forward(self, residual, mask, x):
+    def forward(self, mask, residual, x):
         return cf_(
+            self.ln,
             _ + x,
             f_(self.conv, mask),
-            self.ln,
         )(residual)
 
 
@@ -180,8 +182,6 @@ class TimeSeparable(nn.Module):
         super().__init__()
         if padding is None:
             padding = pad_conv(size_kernel)
-
-        self.ln = LayerNorm(size_in)
         self.depthwise = MaskedConv1d(
             size_in,
             size_in,
@@ -202,7 +202,6 @@ class TimeSeparable(nn.Module):
             # time-separable-conv :: 1d-depthwise-conv -> pointwise-conv
             f_(self.pointwise, mask),
             f_(self.depthwise, mask),
-            self.ln,
         )(x)
 
 
@@ -346,7 +345,6 @@ class TDNN(nn.Module):
         super().__init__()
         if padding is None:
             padding = pad_conv(size_kernel, dilation)
-        self.ln = LayerNorm(size_in)
         self.conv = nn.Conv1d(
             size_in,
             size_out,
@@ -356,10 +354,11 @@ class TDNN(nn.Module):
             padding=padding,
         )
         self.relu = nn.ReLU(inplace=True)
+        self.ln = LayerNorm(size_out)
 
     def forward(self, x):
         return cf_(
+            self.ln,
             self.relu,
             self.conv,
-            self.ln,
         )(x)
