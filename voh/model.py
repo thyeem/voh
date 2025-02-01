@@ -262,11 +262,11 @@ class Decoder(nn.Module):
         self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
 
-    def forward(self, mask, x, ipad=0):
+    def forward(self, mask, x):
         return cf_(
             f_(F.normalize, p=2, dim=-1),  # (B, E)
             self.emb,  # (B, E)
-            f_(self.pool, mask, ipad=ipad),  # (B, 2C, 1)
+            f_(self.pool, mask),  # (B, 2C, 1)
             self.ln,  # (B, C, T)
         )(x)
 
@@ -279,7 +279,7 @@ class AttentivePool(nn.Module):
         self.tdnn = TDNN(size_in * 3, size_attn_pool, 1)
         self.conv = nn.Conv1d(size_attn_pool, size_in, 1)
 
-    def forward(self, mask, x, ipad=0):
+    def forward(self, mask, x):
         B, C, T = x.size()  # dim(x) = (B, C, T)
         norm_mask = mask / torch.sum(mask, dim=-1, keepdim=True)  # (B, 1, T)
         mean, std = wtd_mu_sigma(x, norm_mask)  # (B, C, 1) each
@@ -289,7 +289,7 @@ class AttentivePool(nn.Module):
         )  # (B, 3C, T)
         alpha = cf_(
             f_(F.softmax, dim=-1),
-            ob(_.masked_fill)(mask == ipad, float("-inf")),
+            ob(_.masked_fill)(mask == 0, float("-inf")),
             self.conv,  # (B, size_in, T)
             self.tdnn,  # (B, size_attn_pool, T)
         )(y)

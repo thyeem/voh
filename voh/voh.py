@@ -256,7 +256,7 @@ class voh(nn.Module):
         x = x.to(device=self.device)
         mask = create_mask(x, ipad=self.ipad)
         return cf_(
-            f_(self.decoder, mask, ipad=self.ipad),
+            f_(self.decoder, mask),
             f_(self.encoder, mask),
         )(x)
 
