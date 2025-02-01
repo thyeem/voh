@@ -163,6 +163,7 @@ class TimeSeparable(nn.Module):
         super().__init__()
         if padding is None:
             padding = pad_conv(size_kernel)
+        self.ln = LayerNorm(size_in)
         self.depthwise = MaskedConv1d(
             size_in,
             size_in,
@@ -183,6 +184,7 @@ class TimeSeparable(nn.Module):
             # time-separable-conv :: 1d-depthwise-conv -> pointwise-conv
             f_(self.pointwise, mask),
             f_(self.depthwise, mask),
+            self.ln,
         )(x)
 
 
@@ -195,20 +197,22 @@ class SqueezeExcite(nn.Module):
             channels % reduction == 0,
             f"Error, SE({channels}) must be divisible by {reduction}",
         )
+        self.ln = LayerNorm(channels)
         self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
         self.relu = nn.ReLU(inplace=True)
-        self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
+        self.fc2 = nn.Linear(channels // reduction, channels, bias=True)
 
     def forward(self, x):
         return cf_(
-            _ * x,  # (B, C, C)
+            _ * x,  # (B, C, T)
             torch.sigmoid,  # (B, C, 1)
             ob(_.transpose)(1, -1),  # (B, C, 1)
             self.fc2,  # (B, 1, C)
-            self.relu,
+            self.relu,  # (B, 1, C // reduction)
             self.fc1,  # (B, 1, C // reduction)
             ob(_.transpose)(1, -1),  # (B, 1, C)
             ob(_.mean)(dim=-1, keepdim=True),  # (B, C, 1)
+            self.ln,
         )(x)
 
 
@@ -254,15 +258,16 @@ class LayerNorm(nn.LayerNorm):
 class Decoder(nn.Module):
     def __init__(self, conf):
         super().__init__()
+        self.ln = LayerNorm(conf.size_in_dec)
         self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
-        self.ln = nn.LayerNorm(conf.size_out_dec)
 
     def forward(self, mask, x, ipad=0):
         return cf_(
-            self.ln,
+            f_(F.normalize, p=2, dim=-1),  # (B, E)
             self.emb,  # (B, E)
             f_(self.pool, mask, ipad=ipad),  # (B, 2C, 1)
+            self.ln,  # (B, C, T)
         )(x)
 
 
@@ -276,21 +281,18 @@ class AttentivePool(nn.Module):
 
     def forward(self, mask, x, ipad=0):
         B, C, T = x.size()  # dim(x) = (B, C, T)
-        norm_mask = mask / torch.sum(mask, dim=2, keepdim=True)  # (B, 1, T)
-
-        # stats from encoder-output
+        norm_mask = mask / torch.sum(mask, dim=-1, keepdim=True)  # (B, 1, T)
         mean, std = wtd_mu_sigma(x, norm_mask)  # (B, C, 1) each
-        # enriched-concatenated input: (B, 3C, T)
-        y = torch.cat((x, mean.expand(-1, -1, T), std.expand(-1, -1, T)), dim=1)
-
-        # attention value
+        y = torch.cat(
+            (x, mean.expand(-1, -1, T), std.expand(-1, -1, T)),
+            dim=1,
+        )  # (B, 3C, T)
         alpha = cf_(
-            F.softmax,
+            f_(F.softmax, dim=-1),
             ob(_.masked_fill)(mask == ipad, float("-inf")),
-            self.conv,
-            self.tdnn,
+            self.conv,  # (B, size_in, T)
+            self.tdnn,  # (B, size_attn_pool, T)
         )(y)
-        # stats from attention
         mu, sigma = wtd_mu_sigma(x, alpha)  # (B, C, 1) each
         return torch.cat((mu, sigma), dim=1)  # (B, 2C, 1)
 
@@ -303,9 +305,9 @@ class Embedding(nn.Module):
 
     def forward(self, x):
         return cf_(
-            ob(_.squeeze)(dim=-1),
-            self.conv,
-            self.ln,
+            ob(_.squeeze)(dim=-1),  # (B, E)
+            self.conv,  # (B, E, 1)
+            self.ln,  # (B, 2C, 1)
         )(x)
 
 
@@ -317,7 +319,7 @@ class TDNN(nn.Module):
         size_in,
         size_out,
         size_kernel=1,
-        dilation=2,
+        dilation=1,
         stride=1,
         padding=None,
     ):
@@ -333,11 +335,11 @@ class TDNN(nn.Module):
             stride=stride,
             padding=padding,
         )
-        self.tanh = nn.Tanh()
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         return cf_(
-            self.tanh,
-            self.conv,
-            self.ln,
+            self.relu,  # (B, C'out, T)
+            self.conv,  # (B, C'out, T)
+            self.ln,  # (B, C'in, T)
         )(x)
