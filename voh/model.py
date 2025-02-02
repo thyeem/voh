@@ -104,7 +104,6 @@ class RepeatR(nn.Module):
             padding = pad_conv(size_kernel)
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
-        self.ln = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -112,7 +111,6 @@ class RepeatR(nn.Module):
         return cf_(
             self.dropout,
             self.relu,
-            self.ln,
             _ + x,  # skip connection
             f_(self.tsc, mask),
         )(x)
@@ -136,14 +134,12 @@ class Context(nn.Module):
 
         self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
         self.se = SqueezeExcite(size_out, reduction=reduction)
-        self.ln = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True) if end else None
         self.end = end  # flag for [pro|epil]log block
 
     def forward(self, mask, x):
         return cf_(
             self.relu if self.end else id,
-            self.ln,
             id if self.end else _ + x,  # skip connection when not in end block
             self.se,
             f_(self.tsc, mask),
@@ -200,7 +196,7 @@ class SqueezeExcite(nn.Module):
         self.ln = LayerNorm(channels)
         self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
         self.relu = nn.ReLU(inplace=True)
-        self.fc2 = nn.Linear(channels // reduction, channels, bias=True)
+        self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
 
     def forward(self, x):
         return cf_(
@@ -326,7 +322,6 @@ class TDNN(nn.Module):
         super().__init__()
         if padding is None:
             padding = pad_conv(size_kernel, dilation)
-        self.ln = LayerNorm(size_in)
         self.conv = nn.Conv1d(
             size_in,
             size_out,
@@ -341,5 +336,4 @@ class TDNN(nn.Module):
         return cf_(
             self.relu,  # (B, C'out, T)
             self.conv,  # (B, C'out, T)
-            self.ln,  # (B, C'in, T)
         )(x)

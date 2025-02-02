@@ -96,16 +96,16 @@ class voh(nn.Module):
                 v=dataq(self.conf.size_val),
             ),
             pos=dmap(
-                t=dataq(1000 * self.conf.size_batch),
+                t=dataq(self.conf.int_val * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(1000 * self.conf.size_batch, 1.0),
+                t=dataq(self.conf.int_val * self.conf.size_batch, 1.0),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             mine=dmap(
-                size=dataq(1000),
-                diff=dataq(1000 * self.conf.size_batch**2),
+                size=dataq(self.conf.int_val),
+                diff=dataq(self.conf.int_val * self.conf.size_batch**2),
             ),
         )
         self.ema = ema(alpha=self.stat.alpha)
@@ -374,22 +374,22 @@ class voh(nn.Module):
             negative.unsqueeze(0),
             dim=-1,
         )
-        hard = (
-            an > self.dq.neg.t.percentile(100 * (1 - self.conf.hard_ratio))
-        ).nonzero()
-        semi = (
-            (an > ap) & (an < ap + self.conf.semi_ratio * self.conf.margin)
-        ).nonzero()
-        q = (
-            (an == torch.max(an)).nonzero()
-            if not len(hard) and not len(semi)
-            else torch.cat([hard, semi], dim=0)
+        hardcut = dataq(an.numel(), an.tolist()).percentile(
+            100 * (1 - self.conf.hard_ratio)
         )
+        semicut = self.conf.semi_ratio * self.conf.margin
+        hard = (an > hardcut).nonzero()
+        semi = ((an > ap) & (an - ap < semicut)).nonzero()
+        i, j = (
+            torch.cat([hard, semi], dim=0)
+            if len(hard) or len(semi)
+            else (an == torch.max(an)).nonzero()
+        ).unbind(dim=1)
         self.dq.mine.diff.update((ap - an).tolist())
-        self.dq.mine.size.update(len(q))
-        self.dq.pos.t.update(ap.tolist())
-        self.dq.neg.t.update(an.tolist())
-        return q[:, 0], q[:, 1]
+        self.dq.mine.size.update(len(i))
+        self.dq.pos.t.update(ap[(i, j)].tolist())
+        self.dq.neg.t.update(an[(i, j)].tolist())
+        return i, j
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
