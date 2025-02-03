@@ -260,7 +260,6 @@ class Decoder(nn.Module):
 
     def forward(self, mask, x):
         return cf_(
-            f_(F.normalize, p=2, dim=-1),  # (B, E)
             self.emb,  # (B, E)
             f_(self.pool, mask),  # (B, 2C, 1)
             self.ln,  # (B, C, T)
@@ -273,37 +272,35 @@ class AttentivePool(nn.Module):
     def __init__(self, size_in, size_attn_pool):
         super().__init__()
         self.tdnn = TDNN(size_in * 3, size_attn_pool, 1)
+        self.tanh = nn.Tanh()
         self.conv = nn.Conv1d(size_attn_pool, size_in, 1)
 
     def forward(self, mask, x):
         B, C, T = x.size()  # dim(x) = (B, C, T)
         norm_mask = mask / torch.sum(mask, dim=-1, keepdim=True)  # (B, 1, T)
         mean, std = wtd_mu_sigma(x, norm_mask)  # (B, C, 1) each
-        y = torch.cat(
-            (x, mean.expand(-1, -1, T), std.expand(-1, -1, T)),
-            dim=1,
-        )  # (B, 3C, T)
-        alpha = cf_(
-            f_(F.softmax, dim=-1),
-            ob(_.masked_fill)(mask == 0, float("-inf")),
-            self.conv,  # (B, size_in, T)
-            self.tdnn,  # (B, size_attn_pool, T)
-        )(y)
-        mu, sigma = wtd_mu_sigma(x, alpha)  # (B, C, 1) each
-        return torch.cat((mu, sigma), dim=1)  # (B, 2C, 1)
+        return cf_(
+            ob(_.squeeze)(dim=-1),  # (B, 2C)
+            f_(torch.cat, dim=1),  # (B, 2C, 1)
+            f_(wtd_mu_sigma, x),  # ((B, C, 1), (B, C, 1)) = (mu, sigma)
+            f_(F.softmax, dim=-1),  # (B, C, T)
+            ob(_.masked_fill)(mask == 0, float("-inf")),  # (B, C, T)
+            self.conv,  # (B, C, T)
+            self.tanh,  # (B, C', T)
+            self.tdnn,  # (B, C', T)
+            f_(torch.cat, dim=1),  # (B, 3C, T)
+        )((x, mean.expand(-1, -1, T), std.expand(-1, -1, T)))
 
 
 class Embedding(nn.Module):
     def __init__(self, size_in, size_out):
         super().__init__()
-        self.ln = LayerNorm(size_in)
-        self.conv = nn.Conv1d(size_in, size_out, 1)
+        self.fc = nn.Linear(size_in, size_out, bias=False)
 
     def forward(self, x):
         return cf_(
-            ob(_.squeeze)(dim=-1),  # (B, E)
-            self.conv,  # (B, E, 1)
-            self.ln,  # (B, 2C, 1)
+            self.fc,  # (B, E)
+            ob(_.squeeze)(dim=-1),  # (B, 2C)
         )(x)
 
 
@@ -330,10 +327,12 @@ class TDNN(nn.Module):
             stride=stride,
             padding=padding,
         )
+        self.ln = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         return cf_(
             self.relu,  # (B, C'out, T)
+            self.ln,  # (B, C'out, T)
             self.conv,  # (B, C'out, T)
         )(x)
