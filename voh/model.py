@@ -289,7 +289,10 @@ class AttentivePool(nn.Module):
             self.tanh,  # (B, C', T)
             self.tdnn,  # (B, C', T)
             f_(torch.cat, dim=1),  # (B, 3C, T)
-        )((x, mean.expand(-1, -1, T), std.expand(-1, -1, T)))
+            cons(x),  # ((B, C, 1), (B, C, 1), (B, C, 1),)
+            cons(mean.expand(-1, -1, T)),  # ((B, C, 1), (B, C, 1),)
+            cons(std.expand(-1, -1, T)),  # ((B, C, 1),)
+        )(())
 
 
 class Embedding(nn.Module):

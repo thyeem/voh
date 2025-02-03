@@ -161,7 +161,7 @@ def filterbank(
         fmax=fmax or sr // 2,
     )  # (C, T) = (n_mels, num_frames)
     return cf_(
-        _[:, :max_frames] if max_frames else id,
+        lambda x: x[:, :max_frames] if max_frames else id,
         torch.log,
         torch.Tensor.float,
         torch.from_numpy,

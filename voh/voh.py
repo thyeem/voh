@@ -94,17 +94,21 @@ class voh(nn.Module):
             loss=dmap(
                 t=dataq(self.conf.size_val),
                 v=dataq(self.conf.size_val),
+                triplet=dataq(self.conf.size_val),
+                dist=dataq(self.conf.size_val),
+                penalty=dataq(self.conf.size_val),
             ),
             pos=dmap(
-                t=dataq(self.conf.size_val * self.conf.size_batch),
+                t=dataq(self.conf.int_val * self.conf.size_batch),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             neg=dmap(
-                t=dataq(self.conf.size_val * self.conf.size_batch**2),
+                t=dataq(self.conf.int_val * self.conf.size_batch**2),
                 v=dataq(self.conf.size_val * self.conf.size_batch),
             ),
             mine=dmap(
-                pick=dataq(self.conf.int_val * self.conf.size_batch),
+                pos=dataq(self.conf.int_val * self.conf.size_batch),
+                neg=dataq(self.conf.int_val * self.conf.size_batch),
                 diff=dataq(self.conf.int_val * self.conf.size_batch**2),
             ),
         )
@@ -355,13 +359,20 @@ class voh(nn.Module):
     def get_loss(self, anchor, positive, negative):
         ap = F.cosine_similarity(anchor, positive, dim=-1)
         an = F.cosine_similarity(anchor, negative, dim=-1)
-        loss = F.relu(an - ap + self.conf.margin)
-        dist = (anchor - positive).norm(dim=-1).mean()
-        return (
-            self.conf.scale * loss.mean()  # triplet loss
-            + self.conf.lam * dist  # pos-embedding distance penalty
-            + (torch.exp(self.conf.nu * an) - 1).mean()  # neg-sim penalty
-        )
+
+        # triplet loss
+        triplet = self.conf.scale * F.relu(an - ap + self.conf.margin).mean()
+
+        # positive-embedding distance
+        dist = self.conf.lam * (anchor - positive).norm(dim=-1).mean()
+
+        # negative-similarity penalty
+        penalty = torch.exp(self.conf.nu * an).mean()
+
+        self.dq.loss.triplet.update(triplet.item())
+        self.dq.loss.dist.update(dist.item())
+        self.dq.loss.penalty.update(penalty.item())
+        return triplet + dist + penalty
 
     def mine(self, anchor, positive, negative):
         """Find the indices of challenging negatives based on distribution."""
@@ -373,9 +384,10 @@ class voh(nn.Module):
         hard = (an > hardcut).nonzero()
         q = hard if len(hard) else (an == torch.max(an)).nonzero()
         self.dq.mine.diff.update((ap - an).tolist())
-        self.dq.mine.pick.update(an[q].tolist())
-        self.dq.pos.t.update(ap.tolist())
+        self.dq.mine.neg.update(an[q].tolist())
+        self.dq.mine.pos.update(ap[q[:, 0]].tolist())
         self.dq.neg.t.update(an.tolist())
+        self.dq.pos.t.update(ap.tolist())
         return q.unbind(dim=1)
 
     @torch.no_grad()
@@ -427,7 +439,7 @@ class voh(nn.Module):
                     "d-SIMILARITY",
                     "POSITIVES",
                     "NEGATIVES",
-                    "LOSS(EMA) >= MIN",
+                    "LOSS(EMA)",
                 ]
                 if self.on_interval(5 * self.conf.size_val)
                 else []
@@ -442,12 +454,21 @@ class voh(nn.Module):
             ],
             [
                 "",
-                f"{self.dq.mine.pick.median:.4f}",
+                "MIN-LOSS",
+                "{:7.4f}/{:.4f}".format(*_[0, -1](self.dq.mine.diff.quartile)),
+                f"{self.dq.mine.pos.median:.4f}/{self.dq.mine.pos.mad:.4f}",
+                f"{self.dq.mine.neg.median:.4f}/{self.dq.mine.neg.mad:.4f}",
+                f"{self.dq.loss.triplet.median:.2f}/"
+                f"{self.dq.loss.dist.median:.2f}/"
+                f"{self.dq.loss.penalty.median:.2f}",
+            ],
+            [
+                "",
+                f">= {self.stat.minloss:.4f}",
                 f"{self.dq.mine.diff.min:7.4f}/{self.dq.mine.diff.max:.4f}",
                 f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
                 f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
-                f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})"
-                f" >= {self.stat.minloss:.4f}",
+                f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})",
             ],
         ]
         print(tabulate(filterl(bool, log), nohead=True), "\n")
