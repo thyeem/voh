@@ -7,10 +7,6 @@ from torch.nn import functional as F
 from .utils import *
 
 
-def pad_conv(size_kernel, dilation=1):
-    return (dilation * (size_kernel - 1)) // 2
-
-
 class Encoder(nn.Module):
     def __init__(self, conf):
         super().__init__()
@@ -18,28 +14,32 @@ class Encoder(nn.Module):
         self.prolog = Context(
             conf.size_in_enc,
             conf.size_hidden_enc,
-            conf.size_kernel_prolog,
+            conf.size_kernels[0],
+            dilation=conf.size_dilations[0],
             reduction=conf.ratio_reduction,
             end=True,
         )
-        # num-of-blocks(B) = 1(prolog) + num-of-size_kernel_blocks + 1(epilog)
         self.blocks = nn.ModuleList(
             [
                 Block(
                     conf.size_hidden_enc,
                     conf.size_hidden_enc,
-                    conf.num_repeat_blocks,  # repeated block R-times
+                    conf.num_repeats,  # repeated block R-times
                     size_kernel,
+                    dilation=size_dilation,
                     reduction=conf.ratio_reduction,
                     dropout=conf.dropout,
                 )
-                for size_kernel in conf.size_kernel_blocks
+                for size_kernel, size_dilation in zipl(
+                    conf.size_kernels, conf.size_dilations
+                )[1:-1]
             ]
         )
         self.epilog = Context(
             conf.size_hidden_enc,
             conf.size_out_enc,
-            conf.size_kernel_epilog,
+            conf.size_kernels[-1],
+            dilation=conf.size_dilations[-1],
             reduction=conf.ratio_reduction,
             end=True,
         )
@@ -60,8 +60,9 @@ class Block(nn.Module):
         self,
         size_in,
         size_out,
-        num_repeat,
+        num_repeats,
         size_kernel,
+        dilation=1,
         reduction=8,
         dropout=0.1,
     ):
@@ -72,14 +73,17 @@ class Block(nn.Module):
                     size_in,
                     size_out,
                     size_kernel,
+                    dilation=dilation,
+                    dropout=dropout,
                 )
-                for _ in range(num_repeat)
+                for _ in range(num_repeats)
             ]
         )
         self.context = Context(
             size_in,
             size_out,
             size_kernel,
+            dilation=dilation,
             reduction=reduction,
             end=False,
         )
@@ -98,12 +102,21 @@ class Block(nn.Module):
 class RepeatR(nn.Module):
     """Unit block repeated R-times in Block module"""
 
-    def __init__(self, size_in, size_out, size_kernel, padding=None, dropout=0.1):
+    def __init__(
+        self,
+        size_in,
+        size_out,
+        size_kernel,
+        dilation=1,
+        dropout=0.1,
+    ):
         super().__init__()
-        if padding is None:
-            padding = pad_conv(size_kernel)
-
-        self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
+        self.tsc = TimeSeparable(
+            size_in,
+            size_out,
+            size_kernel,
+            dilation=dilation,
+        )
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(p=dropout)
 
@@ -124,15 +137,17 @@ class Context(nn.Module):
         size_in,
         size_out,
         size_kernel,
-        padding=None,
+        dilation=1,
         reduction=8,
         end=False,
     ):
         super().__init__()
-        if padding is None:
-            padding = pad_conv(size_kernel)
-
-        self.tsc = TimeSeparable(size_in, size_out, size_kernel, padding=padding)
+        self.tsc = TimeSeparable(
+            size_in,
+            size_out,
+            size_kernel,
+            dilation=dilation,
+        )
         self.se = SqueezeExcite(size_out, reduction=reduction)
         self.relu = nn.ReLU(inplace=True) if end else None
         self.end = end  # flag for [pro|epil]log block
@@ -154,17 +169,15 @@ class TimeSeparable(nn.Module):
         size_in,
         size_out,
         size_kernel,
-        padding=None,
+        dilation=1,
     ):
         super().__init__()
-        if padding is None:
-            padding = pad_conv(size_kernel)
         self.ln = LayerNorm(size_in)
         self.depthwise = MaskedConv1d(
             size_in,
             size_in,
             size_kernel,
-            padding=padding,
+            dilation=dilation,
             groups=size_in,
             bias=False,
         )
@@ -172,6 +185,7 @@ class TimeSeparable(nn.Module):
             size_in,
             size_out,
             1,
+            dilation=dilation,
             bias=False,
         )
 
@@ -219,17 +233,19 @@ class MaskedConv1d(nn.Module):
         size_out,
         size_kernel,
         stride=1,
-        padding=0,
+        dilation=1,
         groups=1,
         bias=False,
     ):
         super().__init__()
+
         self.conv = nn.Conv1d(
             size_in,
             size_out,
             size_kernel,
             stride=stride,
-            padding=padding,
+            padding=(dilation * (size_kernel - 1)) // 2,
+            dilation=dilation,
             groups=groups,
             bias=bias,
         )
@@ -255,7 +271,11 @@ class Decoder(nn.Module):
     def __init__(self, conf):
         super().__init__()
         self.ln = LayerNorm(conf.size_in_dec)
-        self.pool = AttentivePool(conf.size_in_dec, conf.size_attn_pool)
+        self.pool = AttentivePool(
+            conf.size_in_dec,
+            conf.size_attn_pool,
+            dropout=conf.dropout,
+        )
         self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
 
     def forward(self, mask, x):
@@ -269,11 +289,12 @@ class Decoder(nn.Module):
 class AttentivePool(nn.Module):
     """Attention pooling layer with mask and statistical pooling"""
 
-    def __init__(self, size_in, size_attn_pool):
+    def __init__(self, size_in, size_attn_pool, dropout=0.1):
         super().__init__()
         self.tdnn = TDNN(size_in * 3, size_attn_pool, 1)
         self.tanh = nn.Tanh()
         self.conv = nn.Conv1d(size_attn_pool, size_in, 1)
+        self.dropout = nn.Dropout(p=dropout)
 
     def forward(self, mask, x):
         B, C, T = x.size()  # dim(x) = (B, C, T)
@@ -286,7 +307,8 @@ class AttentivePool(nn.Module):
             f_(F.softmax, dim=-1),  # (B, C, T)
             ob(_.masked_fill)(mask == 0, float("-inf")),  # (B, C, T)
             self.conv,  # (B, C, T)
-            self.tanh,  # (B, C', T)
+            self.dropout,
+            self.tanh,
             self.tdnn,  # (B, C', T)
             f_(torch.cat, dim=1),  # (B, 3C, T)
             cons(x),  # ((B, C, 1), (B, C, 1), (B, C, 1),)
@@ -298,13 +320,10 @@ class AttentivePool(nn.Module):
 class Embedding(nn.Module):
     def __init__(self, size_in, size_out):
         super().__init__()
-        self.fc = nn.Linear(size_in, size_out, bias=False)
+        self.fc = nn.Linear(size_in, size_out, bias=True)
 
     def forward(self, x):
-        return cf_(
-            self.fc,  # (B, E)
-            ob(_.squeeze)(dim=-1),  # (B, 2C)
-        )(x)
+        return self.fc(x)  # (B, 2C) -> (B, E)
 
 
 class TDNN(nn.Module):
@@ -317,25 +336,22 @@ class TDNN(nn.Module):
         size_kernel=1,
         dilation=1,
         stride=1,
-        padding=None,
     ):
         super().__init__()
-        if padding is None:
-            padding = pad_conv(size_kernel, dilation)
         self.conv = nn.Conv1d(
             size_in,
             size_out,
             size_kernel,
             dilation=dilation,
             stride=stride,
-            padding=padding,
+            padding=(dilation * (size_kernel - 1)) // 2,
         )
         self.ln = LayerNorm(size_out)
         self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         return cf_(
-            self.relu,  # (B, C'out, T)
-            self.ln,  # (B, C'out, T)
-            self.conv,  # (B, C'out, T)
+            self.relu,
+            self.ln,
+            self.conv,  # (B, C'in, T) -> (B, C'out, T)
         )(x)

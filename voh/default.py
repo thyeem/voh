@@ -8,15 +8,15 @@ conf = dmap(
     # model configuration
     # -----------------------
     size_in_enc=(CORE, 80),
-    size_hidden_enc=(CORE, 512),
-    size_out_enc=(CORE, 1024),
-    size_kernel_prolog=(CORE, 3),
-    size_kernel_epilog=(CORE, 1),
-    size_kernel_blocks=(CORE, (5, 9, 13, 17)),
-    num_repeat_blocks=(CORE, 2),
+    size_hidden_enc=(CORE, 256),
+    size_out_enc=(CORE, 512),
+    size_kernels=(CORE, (3, 5, 9, 13, 1)),
+    size_dilations=(CORE, (1, 1, 1, 1, 1)),
+    num_repeats=(CORE, 2),
     ratio_reduction=(CORE, 8),
-    size_in_dec=(CORE, 1024),
-    size_attn_pool=(CORE, 128),
+    size_in_dec=(CORE, 512),
+    size_attn_pool=(CORE, 64),
+    num_heads=(CORE, 4),
     size_out_dec=(CORE, 128),
     dropout=(CORE, 0.1),
     # -----------------------
@@ -42,6 +42,7 @@ conf = dmap(
     lr=(META, 3e-4),  # learning rate
     lr_min=(META, 1e-6),  # mininum of learning rate
     epochs=(META, 1),  # number of epochs
+    acc_steps=(META, 4),  # number of accumulated steps per update
     steps=(META, 10000),  # number of steps per epoch
     int_sched_lr=(META, 20),  # interval of updating lr, None for no decay
     size_batch=(META, 8),  # number of samples per iteration

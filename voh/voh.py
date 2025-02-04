@@ -219,11 +219,14 @@ class voh(nn.Module):
             hidden_enc=self.conf.size_hidden_enc,
             out_enc=self.conf.size_out_enc,
             in_dec=self.conf.size_in_dec,
-            attention_dec=self.conf.size_attn_pool,
             out_dec=f"{self.conf.size_out_dec}  (embedding size)",
-            kernels=str(self.conf.size_kernel_blocks),
-            blocks_B=len(self.conf.size_kernel_blocks),
-            repeats_R=self.conf.num_repeat_blocks,
+            kernels=str(self.conf.size_kernels),
+            dilations=str(self.conf.size_dilations),
+            blocks_B=max(0, len(self.conf.size_kernels) - 2),
+            repeats_R=self.conf.num_repeats,
+            attention_dec=self.conf.size_attn_pool,
+            num_heads=self.conf.num_heads,
+            ratio_reduction=self.conf.ratio_reduction,
         ) | (
             dmap(
                 path=which_model(self.name),
@@ -348,10 +351,11 @@ class voh(nn.Module):
                 self.train()
                 anchor, positive, negative = map(self, triplet)
                 loss = self.get_loss(anchor[i], positive[i], negative[j])
-                self.optim.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=2.0)
-                self.optim.step()
+                if self.on_interval(self.conf.acc_steps):
+                    self.optim.step()
+                    self.optim.zero_grad(set_to_none=True)
                 self.dq.loss.t.update(loss.item())
                 self.log(sched=True)
                 self.it += 1
