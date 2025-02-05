@@ -62,10 +62,10 @@ class voh(nn.Module):
         return self
 
     def set_seed(self, seed=None):
-        seed = seed or randint(1 << 31)
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
+        self.seed = seed or randint(1 << 31)
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
         return self
 
     def set_model(self, model=None, strict=True):
@@ -337,7 +337,7 @@ class voh(nn.Module):
         with dl:
             for _ in tracker(range(g), "training", start=self.it):
                 self.validate(dl, sched=True)
-                self.dist(sched=True)
+                self.perf(sched=True)
                 triplet = next(dl)
                 self.eval()
                 with torch.no_grad():
@@ -506,47 +506,15 @@ class voh(nn.Module):
     def on_interval(self, val):
         return self.it and self.it % val == 0
 
-    def dist_pairs(self, size):
-        def waveform_pairs(mono):
-            return [mapl(readwav, p) for p in randpair(db, mono=mono, size=size)]
-
-        if not hasattr(self, "nfix") or not hasattr(self, "pfix"):
-            db = read_json(self.conf.ds_val)
-            self.nfix = waveform_pairs(False)
-            self.pfix = waveform_pairs(True)
-        return self.nfix, self.pfix
-
     @torch.no_grad()
-    def dist(self, data=None, size=42, sched=False):
-        def t(pairs, desc, mono=True):
-            cosims = [
-                F.cosine_similarity(*map(f_(self.embed, file=False), pair)).item()
-                for pair in tracker(pairs, desc)
-            ]
-            bins = [0.6, 0.7, 0.8, 0.9, 1.01]
-            hist = Counter(bisect(bins, cosim) for cosim in cosims)
-            pdf = [hist.get(i, 0) / len(pairs) for i in range(len(bins))]
-            return dmap(
-                pdf=pdf,
-                cdf=(scanl1 if mono else scanr1)(op.add, pdf),
-                median=np.median(cosims),
-                mad=np.median(np.abs(np.array(cosims) - np.median(cosims))),
-            )
-
-        if sched and not self.on_interval(self.conf.int_dist):
+    def perf(self, size=None, sched=False):
+        if sched and not self.on_interval(self.conf.int_perf):
             return
-        nfix, pfix = data if data else self.dist_pairs(size)
-        n, p = t(nfix, "n-distrib", False), t(pfix, "p-distrib", True)
-        print(
-            tabulate(
-                [
-                    [f"{x:.4f}" for x in n.pdf] + [f"{n.median:.4f}"],
-                    [f"{x:.4f}" for x in n.cdf] + [f"{n.mad:.4f}"],
-                    ["<0.6", "<0.7", "<0.8", "<0.9", "<1.0", "med/mad"],
-                    [f"{x:.4f}" for x in p.pdf] + [f"{p.median:.4f}"],
-                    [f"{x:.4f}" for x in p.cdf] + [f"{p.mad:.4f}"],
-                ],
-                style="grid",
-                nohead=True,
-            ),
-        )
+        if size or not hasattr(self, "__perf__"):
+            db = read_json(self.conf.ds_val)
+            size = size or self.conf.size_perf
+            self.__perf__ = (
+                randpair(db, size=size, mono=False),
+                randpair(db, size=size, mono=True),
+            )
+        perf(self, self.__perf__, out=f"/tmp/{self.name}-{self.seed}")

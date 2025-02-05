@@ -4,8 +4,6 @@ import math
 import os
 import re
 import wave
-from bisect import bisect
-from collections import Counter
 from functools import lru_cache, partial
 
 import librosa
@@ -82,6 +80,11 @@ class dataq:
 
     def __len__(self):
         return len(self.data)
+
+    def __getitem__(self, x):
+        if isinstance(x, slice):
+            return np.array(self.data)[x]
+        return self.data.__getitem__(x)
 
     @property
     def size(self):
@@ -621,16 +624,13 @@ def triplet(db, size=1):
 
 
 @torch.no_grad
-def distrib(model, data, bins=[0.6, 0.7, 0.8, 0.9, 1.0], out=None):
+def perf(model, data, bins=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0], out=None):
     def t(pairs, desc, mono):
         cosims = [
             F.cosine_similarity(*map(model.embed, pair)).item()
             for pair in tracker(pairs, desc)
         ]
-        _b = bins[:]
-        _b[-1] += 0.01
-        hist = Counter(bisect(_b, cosim) for cosim in cosims)
-        pdf = [hist.get(i, 0) / len(pairs) for i in range(len(_b))]
+        pdf = fst(np.histogram(cosims, bins=bins)) / len(pairs)
         return dmap(
             pdf=pdf,
             cdf=(scanl1 if mono else scanr1)(op.add, pdf),
@@ -645,7 +645,7 @@ def distrib(model, data, bins=[0.6, 0.7, 0.8, 0.9, 1.0], out=None):
         [
             [f"{x:.4f}" for x in n.pdf] + [f"{n.median:.4f}"],
             [f"{x:.4f}" for x in n.cdf] + [f"{n.mad:.4f}"],
-            mapl(cf_("<" + _, str), bins) + ["med/mad"],
+            mapl(cf_("<" + _, str), bins[1:]) + ["med/mad"],
             [f"{x:.4f}" for x in p.pdf] + [f"{p.median:.4f}"],
             [f"{x:.4f}" for x in p.cdf] + [f"{p.mad:.4f}"],
         ],

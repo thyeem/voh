@@ -48,8 +48,9 @@ conf = dmap(
     size_batch=(META, 8),  # number of samples per iteration
     size_val=(META, 20),  # size of validation / interval of logging
     int_val=(META, 100),  # interval of validation
-    int_dist=(META, 4000),  # interval of distribution test
     num_workers=(META, 2),  # number of dataloader workers
+    size_perf=(META, 4000),  # size of simple-perf test
+    int_perf=(META, 4000),  # interval of simple-perf test
 )
 
 modelpath = f"{dirname(__file__)}/../o"
