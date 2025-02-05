@@ -47,7 +47,7 @@ class Encoder(nn.Module):
     def forward(self, mask, x):
         return cf_(
             f_(self.epilog, mask),  # (B, C'out, T)
-            cf__(*[f_(b, mask) for b in self.blocks]),  # (B, C'hidden, T)
+            cf_(*[f_(b, mask) for b in rev(self.blocks)]),  # (B, C'hidden, T)
             f_(self.prolog, mask),  # (B, C'hidden, T)
             self.ln,  # (B, C'in, T)
         )(x)
@@ -271,7 +271,7 @@ class Decoder(nn.Module):
     def __init__(self, conf):
         super().__init__()
         self.ln = LayerNorm(conf.size_in_dec)
-        self.pool = MultiHeadAttentivePool(
+        self.pool = AttentivePool(
             conf.size_in_dec,
             conf.size_attn_pool,
             num_heads=conf.num_heads,
@@ -291,71 +291,29 @@ class Decoder(nn.Module):
 
 
 class AttentivePool(nn.Module):
-    """Attention pooling layer with mask and statistical pooling"""
+    """Attention pooling layer with multi-head attention approach"""
 
-    def __init__(self, size_in, size_attn_pool, dropout=0.1):
-        super().__init__()
-        self.tdnn = TDNN(size_in * 3, size_attn_pool, 1)
-        self.tanh = nn.Tanh()
-        self.conv = nn.Conv1d(size_attn_pool, size_in, 1)
-        self.dropout = nn.Dropout(p=dropout)
-
-    def forward(self, mask, x):
-        B, C, T = x.size()  # dim(x) = (B, C, T)
-        norm_mask = mask / torch.sum(mask, dim=-1, keepdim=True)  # (B, 1, T)
-        mean, std = wtd_mu_sigma(x, norm_mask)  # (B, C, 1) each
-        return cf_(
-            ob(_.squeeze)(dim=-1),  # (B, 2C)
-            f_(torch.cat, dim=1),  # (B, 2C, 1)
-            f_(wtd_mu_sigma, x),  # ((B, C, 1), (B, C, 1)) = (mu, sigma)
-            f_(F.softmax, dim=-1),  # (B, C, T)
-            ob(_.masked_fill)(mask == 0, float("-inf")),  # (B, C, T)
-            self.conv,  # (B, C, T)
-            self.dropout,
-            self.tanh,
-            self.tdnn,  # (B, C', T)
-            f_(torch.cat, dim=1),  # (B, 3C, T)
-            cons(x),  # ((B, C, 1), (B, C, 1), (B, C, 1),)
-            cons(mean.expand(-1, -1, T)),  # ((B, C, 1), (B, C, 1),)
-            cons(std.expand(-1, -1, T)),  # ((B, C, 1),)
-        )(())
-
-
-class MultiHeadAttentivePool(nn.Module):
     def __init__(self, size_in, size_attn_pool, num_heads=4, dropout=0.1):
         super().__init__()
-        self.pre_proj = nn.Conv1d(size_in, size_attn_pool, 1)
+        self.proj = nn.Conv1d(size_in, size_attn_pool, 1)
         self.tanh = nn.Tanh()
         self.dropout = nn.Dropout(p=dropout)
-        self.att_proj = nn.Conv1d(size_attn_pool, num_heads, 1)
+        self.attn = nn.Conv1d(size_attn_pool, num_heads, 1)
 
     def forward(self, mask, x):
-        # x: (B, C, T)
         B, C, T = x.shape
         return cf_(
-            _ * x.unsqueeze(1),
-            ob(_.unsqueeze)(2),
-            f_(F.softmax, dim=-1),
+            ob(_.view)(B, -1),  # (B, H * 2C)
+            f_(torch.cat, dim=-1),  # (B, H, 2C)
+            f_(wtd_mu_sigma, x.unsqueeze(1)),  # ((B, H, C), (B, H, C))
+            ob(_.unsqueeze)(2),  # (B, H, 1, T)
+            f_(F.softmax, dim=-1),  # (B, H, T)
             ob(_.masked_fill)(mask == 0, float("-inf")),
-            self.att_proj,
+            self.attn,  # (B, C'attn, T) -> (B, H, T)
             self.dropout,
             self.tanh,
-            self.pre_proj,
+            self.proj,  # (B, C, T) -> (B, C'attn, T)
         )(x)
-        h = self.pre_proj(x)  # (B, size_attn_pool, T)
-        h = self.tanh(h)
-        h = self.dropout(h)
-        logits = self.att_proj(h)  # (B, num_heads, T)
-        logits = logits.masked_fill(mask == 0, float("-inf"))
-        alpha = F.softmax(logits, dim=-1)  # (B, num_heads, T)
-        alpha = alpha.unsqueeze(2)  # (B, num_heads, 1, T)
-        x_exp = x.unsqueeze(1)  # (B, 1, C, T)
-        mean = torch.sum(x_exp * alpha, dim=-1)  # (B, num_heads, C)
-        mean_sq = torch.sum(x_exp**2 * alpha, dim=-1)  # (B, num_heads, C)
-        std = torch.sqrt(mean_sq - mean**2 + 1e-8)  # (B, num_heads, C)
-        pooled = torch.cat([mean, std], dim=-1)  # (B, num_heads, 2C)
-        pooled = pooled.view(B, -1)  # (B, 2 * C * num_heads)
-        return pooled
 
 
 class Embedding(nn.Module):
@@ -365,34 +323,3 @@ class Embedding(nn.Module):
 
     def forward(self, x):
         return self.fc(x)  # (B, 2C) -> (B, E)
-
-
-class TDNN(nn.Module):
-    """1D-TDNN (Time-Delay Neural Network)"""
-
-    def __init__(
-        self,
-        size_in,
-        size_out,
-        size_kernel=1,
-        dilation=1,
-        stride=1,
-    ):
-        super().__init__()
-        self.conv = nn.Conv1d(
-            size_in,
-            size_out,
-            size_kernel,
-            dilation=dilation,
-            stride=stride,
-            padding=(dilation * (size_kernel - 1)) // 2,
-        )
-        self.ln = LayerNorm(size_out)
-        self.relu = nn.ReLU(inplace=True)
-
-    def forward(self, x):
-        return cf_(
-            self.relu,
-            self.ln,
-            self.conv,  # (B, C'in, T) -> (B, C'out, T)
-        )(x)

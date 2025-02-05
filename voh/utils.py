@@ -4,6 +4,8 @@ import math
 import os
 import re
 import wave
+from bisect import bisect
+from collections import Counter
 from functools import lru_cache, partial
 
 import librosa
@@ -57,16 +59,17 @@ def norm_ppf(q, mean=0, std=1):
 
 
 class dataq:
-    def __init__(self, k=1000, data=None):
-        self.k = k
-        self.data = deque(maxlen=k)
+    def __init__(self, n=100, data=None):
+        self.n = n
+        self.data = deque(maxlen=n)
         if data:
             self.update(data)
 
-    def update(self, v):
-        self.data.extend(flat(v))
+    def update(self, *args):
+        self.data.extend(flat(args))
+        return self
 
-    def if_empty(f):
+    def nan(f):
         def wrapper(self, *args, **kwargs):
             if not self.data:
                 return float("nan")
@@ -74,46 +77,105 @@ class dataq:
 
         return wrapper
 
+    def __bool__(self):
+        return bool(self.data)
+
+    def __len__(self):
+        return len(self.data)
+
     @property
-    @if_empty
+    def size(self):
+        return len(self)
+
+    @nan
+    def percentile(self, q):
+        return np.percentile(self.data, q)
+
+    @nan
+    def quantile(self, q):
+        return np.quantile(self.data, q)
+
+    @property
+    def q1(self):
+        return np.percentile(self.data, 25)
+
+    @property
+    @nan
     def median(self):
         return np.median(self.data)
 
     @property
-    @if_empty
-    def mad(self):
-        median = self.median
-        return np.median(np.abs(np.array(self.data) - median))
-
-    @if_empty
-    def percentile(self, q):
-        return np.percentile(self.data, q)
+    def q3(self):
+        return np.percentile(self.data, 75)
 
     @property
+    def iqr(self):
+        return self.q3 - self.q1
+
+    @property
+    @nan
     def quartile(self):
-        if not self.data:
-            return []
         return np.percentile(self.data, [25, 50, 75])
 
     @property
-    @if_empty
+    @nan
+    def mad(self):
+        return np.median(np.abs(np.array(self.data) - self.median))
+
+    @property
+    @nan
     def mean(self):
         return np.mean(self.data)
 
     @property
-    @if_empty
+    @nan
+    def var(self):
+        return np.var(self.data)
+
+    @property
+    @nan
     def std(self):
         return np.std(self.data)
 
     @property
-    @if_empty
+    @nan
+    def muad(self):
+        return np.mean(np.abs(np.array(self.data) - self.mean))
+
+    @property
+    @nan
     def min(self):
         return np.min(self.data)
 
     @property
-    @if_empty
+    @nan
     def max(self):
         return np.max(self.data)
+
+    @property
+    @nan
+    def minmax(self):
+        return self.min, self.max
+
+    @property
+    def sort(self):
+        return np.sort(self.data)
+
+    @property
+    def sum(self):
+        return np.sum(self.data)
+
+    @property
+    def cumsum(self):
+        return np.cumsum(self.sort)
+
+    @property
+    def prod(self):
+        return np.prod(self.data)
+
+    @property
+    def cumprod(self):
+        return np.cumprod(self.sort)
 
 
 @fx
@@ -169,11 +231,15 @@ def filterbank(
     )(y)
 
 
-def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
+def wtd_mu_sigma(x, alpha, dim=-1, eps=1e-10):
     """Compute mean and standard deviation of input weighted by alpha."""
-    mean = torch.sum(alpha * x, dim=dim, keepdim=True)  # (B, C, 1)
-    var = torch.sum(alpha * (x - mean).pow(2), dim=dim)
-    std = torch.sqrt(var.clamp(min=eps)).unsqueeze(dim)  # (B, C, 1)
+    mean = torch.sum(x * alpha, dim=dim)
+    std = torch.sqrt(
+        torch.clamp(
+            torch.sum(x**2 * alpha, dim=dim) - mean**2,
+            min=eps,
+        )
+    )
     return mean, std
 
 
@@ -552,6 +618,42 @@ def triplet(db, size=1):
     anchor, negative = r[:size], r[size:]
     positive = [nodup(db, a) for a in anchor]
     return anchor, positive, negative
+
+
+@torch.no_grad
+def distrib(model, data, bins=[0.6, 0.7, 0.8, 0.9, 1.0], out=None):
+    def t(pairs, desc, mono):
+        cosims = [
+            F.cosine_similarity(*map(model.embed, pair)).item()
+            for pair in tracker(pairs, desc)
+        ]
+        _b = bins[:]
+        _b[-1] += 0.01
+        hist = Counter(bisect(_b, cosim) for cosim in cosims)
+        pdf = [hist.get(i, 0) / len(pairs) for i in range(len(_b))]
+        return dmap(
+            pdf=pdf,
+            cdf=(scanl1 if mono else scanr1)(op.add, pdf),
+            median=np.median(cosims),
+            mad=np.median(np.abs(np.array(cosims) - np.median(cosims))),
+        )
+
+    out = out or f"/tmp/{randbytes(4).hex()}"
+    # data = ([nagative-pair], [positive-pair])
+    n, p = t(fst(data), "n-distrib", False), t(snd(data), "p-distrib", True)
+    tbl = tabulate(
+        [
+            [f"{x:.4f}" for x in n.pdf] + [f"{n.median:.4f}"],
+            [f"{x:.4f}" for x in n.cdf] + [f"{n.mad:.4f}"],
+            mapl(cf_("<" + _, str), bins) + ["med/mad"],
+            [f"{x:.4f}" for x in p.pdf] + [f"{p.median:.4f}"],
+            [f"{x:.4f}" for x in p.cdf] + [f"{p.mad:.4f}"],
+        ],
+        style="grid",
+        nohead=True,
+    )
+    print(tbl)
+    writer(out, "a").write(tbl)
 
 
 # ----------------------

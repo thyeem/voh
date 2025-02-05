@@ -1,8 +1,6 @@
 import logging
 import multiprocessing as mp
 import random
-from bisect import bisect
-from collections import Counter
 
 import torch
 from foc import *
@@ -109,6 +107,7 @@ class voh(nn.Module):
             mine=dmap(
                 pos=dataq(self.conf.int_val * self.conf.size_batch),
                 neg=dataq(self.conf.int_val * self.conf.size_batch),
+                size=dataq(self.conf.int_val),
                 diff=dataq(self.conf.int_val * self.conf.size_batch**2),
             ),
         )
@@ -281,13 +280,10 @@ class voh(nn.Module):
             .to(device=self.device)
         )
 
-    def readf(self, f):
-        return cf_(self.read, readwav)(f)
-
     @torch.no_grad()
-    def embed(self, x, file=True):
+    def embed(self, f):
         self.eval()
-        return cf_(self, (self.readf if file else self.read))(x)
+        return cf_(self, self.read, readwav)(f)
 
     @torch.no_grad()
     def cosim(self, a, b):
@@ -382,12 +378,11 @@ class voh(nn.Module):
         """Find the indices of challenging negatives based on distribution."""
         ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
         an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
-        hardcut = dataq(an.numel(), an.tolist()).percentile(
-            100 * (1 - self.conf.hard_ratio)
-        )
+        hardcut = dataq(an.numel(), an.tolist()).quantile(1 - self.conf.hard_ratio)
         hard = (an > hardcut).nonzero()
         q = hard if len(hard) else (an == torch.max(an)).nonzero()
         self.dq.mine.diff.update((ap - an).tolist())
+        self.dq.mine.size.update(len(q))
         self.dq.mine.neg.update(an[q].tolist())
         self.dq.mine.pos.update(ap[q[:, 0]].tolist())
         self.dq.neg.t.update(an.tolist())
@@ -452,16 +447,16 @@ class voh(nn.Module):
                 f"{self.it:06d}",
                 f"{self._lr:.8f}",
                 f"{self.dq.mine.diff.median:7.4f}/{self.dq.mine.diff.mad:.4f}",
-                f"{self.dq.pos.t.median:.4f}/{self.dq.pos.t.mad:.4f}",
-                f"{self.dq.neg.t.median:.4f}/{self.dq.neg.t.mad:.4f}",
+                f"{self.dq.pos.t.median:7.4f}/{self.dq.pos.t.mad:.4f}",
+                f"{self.dq.neg.t.median:7.4f}/{self.dq.neg.t.mad:.4f}",
                 f"{self.dq.loss.t.median:.4f}({self.stat.loss.t:.4f})",
             ],
             [
                 "",
-                "MIN-LOSS",
+                "{:.1f}/{:.1f}/{:.1f}".format(*self.dq.mine.size.quartile),
                 "{:7.4f}/{:.4f}".format(*_[0, -1](self.dq.mine.diff.quartile)),
-                f"{self.dq.mine.pos.median:.4f}/{self.dq.mine.pos.mad:.4f}",
-                f"{self.dq.mine.neg.median:.4f}/{self.dq.mine.neg.mad:.4f}",
+                f"{self.dq.mine.pos.median:7.4f}/{self.dq.mine.pos.mad:.4f}",
+                f"{self.dq.mine.neg.median:7.4f}/{self.dq.mine.neg.mad:.4f}",
                 f"{self.dq.loss.triplet.median:.2f}/"
                 f"{self.dq.loss.dist.median:.2f}/"
                 f"{self.dq.loss.penalty.median:.2f}",
@@ -470,8 +465,8 @@ class voh(nn.Module):
                 "",
                 f">= {self.stat.minloss:.4f}",
                 f"{self.dq.mine.diff.min:7.4f}/{self.dq.mine.diff.max:.4f}",
-                f"{self.dq.pos.v.median:.4f}/{self.dq.pos.v.mad:.4f}",
-                f"{self.dq.neg.v.median:.4f}/{self.dq.neg.v.mad:.4f}",
+                f"{self.dq.pos.v.median:7.4f}/{self.dq.pos.v.mad:.4f}",
+                f"{self.dq.neg.v.median:7.4f}/{self.dq.neg.v.mad:.4f}",
                 f"{self.dq.loss.v.median:.4f}({self.stat.loss.v:.4f})",
             ],
         ]
