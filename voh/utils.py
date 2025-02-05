@@ -169,7 +169,6 @@ def filterbank(
     )(y)
 
 
-@torch.no_grad()
 def wtd_mu_sigma(x, alpha, dim=2, eps=1e-10):
     """Compute mean and standard deviation of input weighted by alpha."""
     mean = torch.sum(alpha * x, dim=dim, keepdim=True)  # (B, C, 1)

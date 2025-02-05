@@ -271,12 +271,16 @@ class Decoder(nn.Module):
     def __init__(self, conf):
         super().__init__()
         self.ln = LayerNorm(conf.size_in_dec)
-        self.pool = AttentivePool(
+        self.pool = MultiHeadAttentivePool(
             conf.size_in_dec,
             conf.size_attn_pool,
+            num_heads=conf.num_heads,
             dropout=conf.dropout,
         )
-        self.emb = Embedding(conf.size_in_dec * 2, conf.size_out_dec)
+        self.emb = Embedding(
+            conf.size_in_dec * 2 * conf.num_heads,
+            conf.size_out_dec,
+        )
 
     def forward(self, mask, x):
         return cf_(
@@ -315,6 +319,43 @@ class AttentivePool(nn.Module):
             cons(mean.expand(-1, -1, T)),  # ((B, C, 1), (B, C, 1),)
             cons(std.expand(-1, -1, T)),  # ((B, C, 1),)
         )(())
+
+
+class MultiHeadAttentivePool(nn.Module):
+    def __init__(self, size_in, size_attn_pool, num_heads=4, dropout=0.1):
+        super().__init__()
+        self.pre_proj = nn.Conv1d(size_in, size_attn_pool, 1)
+        self.tanh = nn.Tanh()
+        self.dropout = nn.Dropout(p=dropout)
+        self.att_proj = nn.Conv1d(size_attn_pool, num_heads, 1)
+
+    def forward(self, mask, x):
+        # x: (B, C, T)
+        B, C, T = x.shape
+        return cf_(
+            _ * x.unsqueeze(1),
+            ob(_.unsqueeze)(2),
+            f_(F.softmax, dim=-1),
+            ob(_.masked_fill)(mask == 0, float("-inf")),
+            self.att_proj,
+            self.dropout,
+            self.tanh,
+            self.pre_proj,
+        )(x)
+        h = self.pre_proj(x)  # (B, size_attn_pool, T)
+        h = self.tanh(h)
+        h = self.dropout(h)
+        logits = self.att_proj(h)  # (B, num_heads, T)
+        logits = logits.masked_fill(mask == 0, float("-inf"))
+        alpha = F.softmax(logits, dim=-1)  # (B, num_heads, T)
+        alpha = alpha.unsqueeze(2)  # (B, num_heads, 1, T)
+        x_exp = x.unsqueeze(1)  # (B, 1, C, T)
+        mean = torch.sum(x_exp * alpha, dim=-1)  # (B, num_heads, C)
+        mean_sq = torch.sum(x_exp**2 * alpha, dim=-1)  # (B, num_heads, C)
+        std = torch.sqrt(mean_sq - mean**2 + 1e-8)  # (B, num_heads, C)
+        pooled = torch.cat([mean, std], dim=-1)  # (B, num_heads, 2C)
+        pooled = pooled.view(B, -1)  # (B, 2 * C * num_heads)
+        return pooled
 
 
 class Embedding(nn.Module):
