@@ -56,131 +56,6 @@ def norm_ppf(q, mean=0, std=1):
     return mean + std * np.sqrt(2) * inv_erf(2 * q - 1)
 
 
-class dataq:
-    def __init__(self, n=100, data=None):
-        self.n = n
-        self.data = deque(maxlen=n)
-        if data:
-            self.update(data)
-
-    def update(self, *args):
-        self.data.extend(flat(args))
-        return self
-
-    def nan(f):
-        def wrapper(self, *args, **kwargs):
-            if not self.data:
-                return float("nan")
-            return f(self, *args, **kwargs)
-
-        return wrapper
-
-    def __bool__(self):
-        return bool(self.data)
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, x):
-        if isinstance(x, slice):
-            return np.array(self.data)[x]
-        return self.data.__getitem__(x)
-
-    @property
-    def size(self):
-        return len(self)
-
-    @nan
-    def percentile(self, q):
-        return np.percentile(self.data, q)
-
-    @nan
-    def quantile(self, q):
-        return np.quantile(self.data, q)
-
-    @property
-    def q1(self):
-        return np.percentile(self.data, 25)
-
-    @property
-    @nan
-    def median(self):
-        return np.median(self.data)
-
-    @property
-    def q3(self):
-        return np.percentile(self.data, 75)
-
-    @property
-    def iqr(self):
-        return self.q3 - self.q1
-
-    @property
-    @nan
-    def quartile(self):
-        return np.percentile(self.data, [25, 50, 75])
-
-    @property
-    @nan
-    def mad(self):
-        return np.median(np.abs(np.array(self.data) - self.median))
-
-    @property
-    @nan
-    def mean(self):
-        return np.mean(self.data)
-
-    @property
-    @nan
-    def var(self):
-        return np.var(self.data)
-
-    @property
-    @nan
-    def std(self):
-        return np.std(self.data)
-
-    @property
-    @nan
-    def muad(self):
-        return np.mean(np.abs(np.array(self.data) - self.mean))
-
-    @property
-    @nan
-    def min(self):
-        return np.min(self.data)
-
-    @property
-    @nan
-    def max(self):
-        return np.max(self.data)
-
-    @property
-    @nan
-    def minmax(self):
-        return self.min, self.max
-
-    @property
-    def sort(self):
-        return np.sort(self.data)
-
-    @property
-    def sum(self):
-        return np.sum(self.data)
-
-    @property
-    def cumsum(self):
-        return np.cumsum(self.sort)
-
-    @property
-    def prod(self):
-        return np.prod(self.data)
-
-    @property
-    def cumprod(self):
-        return np.cumprod(self.sort)
-
-
 @fx
 def ema(prev, new, alpha=0.1):
     if prev in (float("inf"), float("-inf")):
@@ -630,7 +505,9 @@ def perf(model, data, bins=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0], out=None):
             F.cosine_similarity(*map(model.embed, pair)).item()
             for pair in tracker(pairs, desc)
         ]
-        pdf = fst(np.histogram(cosims, bins=bins)) / len(pairs)
+        pdf = fst(
+            np.histogram(cosims, bins=cons(float("-inf"), bins)),
+        ) / len(pairs)
         return dmap(
             pdf=pdf,
             cdf=(scanl1 if mono else scanr1)(op.add, pdf),
@@ -645,7 +522,7 @@ def perf(model, data, bins=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0], out=None):
         [
             [f"{x:.4f}" for x in n.pdf] + [f"{n.median:.4f}"],
             [f"{x:.4f}" for x in n.cdf] + [f"{n.mad:.4f}"],
-            mapl(cf_("<" + _, str), bins[1:]) + ["med/mad"],
+            mapl(cf_("<" + _, str), bins) + ["med/mad"],
             [f"{x:.4f}" for x in p.pdf] + [f"{p.median:.4f}"],
             [f"{x:.4f}" for x in p.cdf] + [f"{p.mad:.4f}"],
         ],
@@ -653,7 +530,7 @@ def perf(model, data, bins=[0.5, 0.6, 0.7, 0.8, 0.9, 1.0], out=None):
         nohead=True,
     )
     print(tbl)
-    writer(out, "a").write(tbl)
+    writer(out, "a").write(f"{tbl}\n\n")
 
 
 # ----------------------
@@ -911,7 +788,7 @@ def perturb_tiny(ysr, v=False):
     return cf_(
         *shuffle(
             [
-                probify(p=0.2)(gaussian_noise(snr=(0, 15), v=v)),
+                probify(p=0.5)(gaussian_noise(snr=(0, 15), v=v)),
                 probify(p=0.2)(time_stretch(rate=(0.95, 1.05), v=v)),
             ]
         )

@@ -336,13 +336,7 @@ class voh(nn.Module):
         g = self.conf.steps * self.conf.epochs  # global steps
         with dl:
             for _ in tracker(range(g), "training", start=self.it):
-                self.validate(dl, sched=True)
-                self.perf(sched=True)
-                triplet = next(dl)
-                self.eval()
-                with torch.no_grad():
-                    anchor, positive, negative = map(self, triplet)
-                    i, j = self.mine(anchor, positive, negative)
+                triplet, (i, j) = self.mine(dl)
                 self.update_lr(sched=True)
                 self.train()
                 anchor, positive, negative = map(self, triplet)
@@ -353,7 +347,9 @@ class voh(nn.Module):
                     self.optim.step()
                     self.optim.zero_grad(set_to_none=True)
                 self.dq.loss.t.update(loss.item())
+                self.validate(dl, sched=True)
                 self.log(sched=True)
+                self.perf(sched=True)
                 self.it += 1
 
     def get_loss(self, anchor, positive, negative):
@@ -374,20 +370,31 @@ class voh(nn.Module):
         self.dq.loss.penalty.update(penalty.item())
         return triplet + dist + penalty
 
-    def mine(self, anchor, positive, negative):
+    @torch.no_grad
+    def mine(self, dl):
         """Find the indices of challenging negatives based on distribution."""
-        ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
-        an = F.cosine_similarity(anchor.unsqueeze(1), negative.unsqueeze(0), dim=-1)
-        hardcut = dataq(an.numel(), an.tolist()).quantile(1 - self.conf.hard_ratio)
-        hard = (an > hardcut).nonzero()
-        q = hard if len(hard) else (an == torch.max(an)).nonzero()
-        self.dq.mine.diff.update((ap - an).tolist())
-        self.dq.mine.size.update(len(q))
-        self.dq.mine.neg.update(an[q].tolist())
-        self.dq.mine.pos.update(ap[q[:, 0]].tolist())
-        self.dq.neg.t.update(an.tolist())
-        self.dq.pos.t.update(ap.tolist())
-        return q.unbind(dim=1)
+        self.eval()
+        while True:
+            triplet = next(dl)
+            anchor, positive, negative = map(self, triplet)
+            ap = F.cosine_similarity(anchor, positive, dim=-1).unsqueeze(1)
+            an = F.cosine_similarity(
+                anchor.unsqueeze(1),
+                negative.unsqueeze(0),
+                dim=-1,
+            )
+            diff = ap - an
+            cut = dataq(an.view(-1).tolist()).quantile(1 - self.conf.hard_ratio)
+            q = ((an > cut) & (diff < self.conf.margin)).nonzero()
+            if not len(q):
+                continue
+            self.dq.mine.diff.update(diff.tolist())
+            self.dq.mine.size.update(len(q))
+            self.dq.mine.neg.update(an[q].tolist())
+            self.dq.mine.pos.update(ap[q[:, 0]].tolist())
+            self.dq.neg.t.update(an.tolist())
+            self.dq.pos.t.update(ap.tolist())
+            return triplet, q.unbind(dim=1)
 
     @torch.no_grad()
     def validate(self, dl, sched=False):
@@ -517,4 +524,8 @@ class voh(nn.Module):
                 randpair(db, size=size, mono=False),
                 randpair(db, size=size, mono=True),
             )
-        perf(self, self.__perf__, out=f"/tmp/{self.name}-{self.seed}")
+        perf(
+            self.load(self.name),  # use the best-so-far
+            self.__perf__,
+            out=f"/tmp/{self.name}-{self.seed}",
+        )

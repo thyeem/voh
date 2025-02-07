@@ -95,7 +95,7 @@ class Block(nn.Module):
             self.dropout,
             self.relu,
             f_(self.context, mask),  # SE-context
-            cf__(*[f_(r, mask) for r in self.repeats]),  # Repeat Rx
+            cf_(*[f_(r, mask) for r in rev(self.repeats)]),  # Repeat Rx
         )(x)
 
 
