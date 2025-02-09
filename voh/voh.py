@@ -37,7 +37,7 @@ class voh(nn.Module):
     def load(cls, name, conf=None, strict=True, debug=False):
         """Load the pre-trained"""
         path = name if debug else which_model(name)
-        t = torch.load(path, map_location="cpu")
+        t = torch.load(path, map_location="cpu", weights_only=False)
         return (
             voh()
             .set_name(t.get("name"))
