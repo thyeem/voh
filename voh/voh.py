@@ -93,6 +93,7 @@ class voh(nn.Module):
                 t=dataq(self.conf.size_val),
                 v=dataq(self.conf.size_val),
                 triplet=dataq(self.conf.size_val),
+                ce=dataq(self.conf.size_val),
                 dist=dataq(self.conf.size_val),
                 penalty=dataq(self.conf.size_val),
             ),
@@ -113,6 +114,9 @@ class voh(nn.Module):
         )
         self.ema = ema(alpha=self.stat.alpha)
         return self
+
+    def set_logger(self):
+        self.logger = None
 
     def set_optim(self, optim=None):
         o = self.conf.optim
@@ -357,7 +361,13 @@ class voh(nn.Module):
         an = F.cosine_similarity(anchor, negative, dim=-1)
 
         # triplet loss
-        triplet = self.conf.scale * F.relu(an - ap + self.conf.margin).mean()
+        triplet = self.conf.rho * F.relu(an - ap + self.conf.margin).mean()
+
+        # cross-entropy loss
+        ce = self.conf.kappa * F.cross_entropy(
+            torch.stack([ap, an], dim=-1),
+            torch.zeros(an.size(0), dtype=torch.long, device=anchor.device),
+        )
 
         # positive-embedding distance
         dist = self.conf.lam * (anchor - positive).norm(dim=-1).mean()
@@ -366,9 +376,10 @@ class voh(nn.Module):
         penalty = torch.exp(self.conf.nu * an).mean()
 
         self.dq.loss.triplet.update(triplet.item())
+        self.dq.loss.ce.update(ce.item())
         self.dq.loss.dist.update(dist.item())
         self.dq.loss.penalty.update(penalty.item())
-        return triplet + dist + penalty
+        return triplet + ce + dist + penalty
 
     @torch.no_grad
     def mine(self, dl):
@@ -465,6 +476,7 @@ class voh(nn.Module):
                 f"{self.dq.mine.pos.median:7.4f}/{self.dq.mine.pos.mad:.4f}",
                 f"{self.dq.mine.neg.median:7.4f}/{self.dq.mine.neg.mad:.4f}",
                 f"{self.dq.loss.triplet.median:.2f}/"
+                f"{self.dq.loss.ce.median:.2f}/"
                 f"{self.dq.loss.dist.median:.2f}/"
                 f"{self.dq.loss.penalty.median:.2f}",
             ],

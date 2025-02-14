@@ -30,9 +30,10 @@ conf = dmap(
     reset=(META, False),  # reset meta data when retraining
     seed=(META, None),  # random seed
     margin=(META, 0.3),  # size of additive angular margin
-    scale=(META, 10),  # loss scaling factor
-    lam=(META, 0.1),  # coefficient for distance
-    nu=(META, 1.2),  # coefficient for negative-sim penalty
+    rho=(META, 24),  # triplet loss scaling factor
+    kappa=(META, 12),  # cross-entropy loss scaling factor
+    lam=(META, 0.01),  # coefficient for distance
+    nu=(META, 1.5),  # coefficient for negative-sim penalty
     hard_ratio=(META, 0.1),  # ratio of hard negative samples
     weight_decay=(META, 1e-4),  # optimizer's weight decay
     momentum=(META, 0.9),  # optimizer's momentum
@@ -49,8 +50,9 @@ conf = dmap(
     size_val=(META, 20),  # size of validation / interval of logging
     int_val=(META, 100),  # interval of validation
     num_workers=(META, 2),  # number of dataloader workers
-    size_perf=(META, 4000),  # size of simple-perf test
+    size_perf=(META, 40),  # size of simple-perf test
     int_perf=(META, 4000),  # interval of simple-perf test
 )
 
 modelpath = f"{dirname(__file__)}/../o"
+logpath = f"{dirname(__file__)}/../log"
